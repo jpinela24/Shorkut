@@ -42,3 +42,7 @@ cd Shorkut
 
 - The app is ad-hoc signed (not notarized), so a fresh install on another Mac will need a right-click → Open the first time, or an approval in System Settings → Privacy & Security.
 - Global hotkeys require granting Input Monitoring permission for true system-wide dispatch.
+
+## Author
+
+Made by [jpinela24](https://github.com/jpinela24).

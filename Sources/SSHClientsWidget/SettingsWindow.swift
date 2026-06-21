@@ -132,6 +132,20 @@ struct GeneralTab: View {
                     NSApplication.shared.terminate(nil)
                 }
             }
+
+            Divider()
+
+            Button {
+                NSWorkspace.shared.open(URL(string: "https://github.com/jpinela24")!)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "link")
+                    Text("Made by jpinela24 on GitHub")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
         }
         .padding(.top, 8)
         .onAppear { loginItem.refresh() }
