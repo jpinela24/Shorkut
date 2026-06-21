@@ -32,7 +32,7 @@ cd Shorkut
 
 ## Project layout
 
-- `Sources/SSHClientsWidget/` — all app source (SwiftUI + AppKit).
+- `Sources/Shorkut/` — all app source (SwiftUI + AppKit).
 - `assets/` — logo source files used to generate the app icon and menu bar glyph.
 - `build.sh` — compiles, signs, and installs the app.
 - `make_dmg.sh` — packages a drag-to-Applications `.dmg`.

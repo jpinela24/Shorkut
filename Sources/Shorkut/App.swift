@@ -16,7 +16,7 @@ final class WidgetState: ObservableObject {
 }
 
 @main
-struct SSHClientsWidgetApp: App {
+struct ShorkutApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var state = WidgetState()
     @StateObject private var store = ShortcutStore.shared

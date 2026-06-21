@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "SSHClientsWidget",
+    name: "Shorkut",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "SSHClientsWidget",
-            path: "Sources/SSHClientsWidget"
+            name: "Shorkut",
+            path: "Sources/Shorkut"
         )
     ]
 )
