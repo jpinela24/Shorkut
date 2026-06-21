@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Shorkut logo" width="160">
+</p>
+
 # Shorkut
 
 A native macOS menu-bar app and desktop widget for one-click shortcuts — scripts, apps, and webpages, all in one place.
