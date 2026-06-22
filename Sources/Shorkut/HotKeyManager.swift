@@ -5,7 +5,19 @@ import AppKit
 final class HotKeyManager: ObservableObject {
     static let shared = HotKeyManager()
 
+    private static let enabledDefaultsKey = "ShorkutHotkeysEnabled"
+
     @Published var recordingShortcutId: UUID?
+    @Published var isEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isEnabled, forKey: HotKeyManager.enabledDefaultsKey)
+            if isEnabled {
+                startDispatching()
+            } else {
+                stopDispatching()
+            }
+        }
+    }
 
     private var dispatchGlobalMonitor: Any?
     private var dispatchLocalMonitor: Any?
@@ -13,7 +25,20 @@ final class HotKeyManager: ObservableObject {
 
     private static let relevantModifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
 
-    func startDispatching() {
+    private init() {
+        // Off by default: watching every keystroke system-wide isn't worth the
+        // resource/privacy cost unless the user actually wants hotkeys.
+        isEnabled = UserDefaults.standard.bool(forKey: HotKeyManager.enabledDefaultsKey)
+    }
+
+    /// Call once at launch to honor the persisted toggle. Does nothing if disabled.
+    func startIfEnabled() {
+        if isEnabled {
+            startDispatching()
+        }
+    }
+
+    private func startDispatching() {
         guard dispatchGlobalMonitor == nil else { return }
         dispatchGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleDispatchEvent(event)
@@ -21,6 +46,17 @@ final class HotKeyManager: ObservableObject {
         dispatchLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleDispatchEvent(event)
             return event
+        }
+    }
+
+    private func stopDispatching() {
+        if let monitor = dispatchGlobalMonitor {
+            NSEvent.removeMonitor(monitor)
+            dispatchGlobalMonitor = nil
+        }
+        if let monitor = dispatchLocalMonitor {
+            NSEvent.removeMonitor(monitor)
+            dispatchLocalMonitor = nil
         }
     }
 

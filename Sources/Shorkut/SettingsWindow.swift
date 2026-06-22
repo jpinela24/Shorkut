@@ -87,6 +87,7 @@ struct GeneralTab: View {
     @ObservedObject var store: ShortcutStore
     @ObservedObject private var loginItem = LoginItemManager.shared
     @ObservedObject private var notifications = NotificationManager.shared
+    @ObservedObject private var hotKeyManager = HotKeyManager.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -99,6 +100,16 @@ struct GeneralTab: View {
                 get: { notifications.isEnabled },
                 set: { notifications.isEnabled = $0 }
             ))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Enable global hotkeys", isOn: Binding(
+                    get: { hotKeyManager.isEnabled },
+                    set: { hotKeyManager.isEnabled = $0 }
+                ))
+                Text("Off by default — when on, Shorkut watches keystrokes system-wide to dispatch any shortcut you've assigned a hotkey.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             Picker("Tile width", selection: Binding(
                 get: { store.tileWidthScale },
@@ -179,7 +190,7 @@ struct HotKeyButton: View {
             } else if let code = shortcut.hotKeyCode, let mods = shortcut.hotKeyModifiers {
                 Text(HotKeyManager.displayString(keyCode: code, modifiers: mods))
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(hotKeyManager.isEnabled ? .secondary : .tertiary)
             } else {
                 Image(systemName: "keyboard")
                     .foregroundStyle(.secondary)
@@ -193,7 +204,11 @@ struct HotKeyButton: View {
                 }
             }
         }
-        .help(isRecording ? "Press a key combo, or Esc to cancel" : "Click to set a global hotkey")
+        .help(
+            isRecording ? "Press a key combo, or Esc to cancel" :
+            hotKeyManager.isEnabled ? "Click to set a global hotkey" :
+            "Click to set a hotkey (enable global hotkeys in Settings > General to use it)"
+        )
     }
 }
 

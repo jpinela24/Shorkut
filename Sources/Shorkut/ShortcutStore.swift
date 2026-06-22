@@ -34,8 +34,11 @@ struct ScriptShortcut: Identifiable, Codable {
     var hotKeyModifiers: UInt?
     var customIcon: String?
     var customColorHex: String?
+    /// True for scripts whose content arrived via a .shorkut import (not chosen
+    /// directly by the user via a file picker). Gates a one-time trust prompt.
+    var needsTrustConfirmation: Bool = false
 
-    init(id: UUID = UUID(), label: String, scriptPath: String, sectionId: UUID, kind: ShortcutKind = .script, hotKeyCode: UInt16? = nil, hotKeyModifiers: UInt? = nil, customIcon: String? = nil, customColorHex: String? = nil) {
+    init(id: UUID = UUID(), label: String, scriptPath: String, sectionId: UUID, kind: ShortcutKind = .script, hotKeyCode: UInt16? = nil, hotKeyModifiers: UInt? = nil, customIcon: String? = nil, customColorHex: String? = nil, needsTrustConfirmation: Bool = false) {
         self.id = id
         self.label = label
         self.scriptPath = scriptPath
@@ -45,6 +48,7 @@ struct ScriptShortcut: Identifiable, Codable {
         self.hotKeyModifiers = hotKeyModifiers
         self.customIcon = customIcon
         self.customColorHex = customColorHex
+        self.needsTrustConfirmation = needsTrustConfirmation
     }
 
     init(from decoder: Decoder) throws {
@@ -58,6 +62,7 @@ struct ScriptShortcut: Identifiable, Codable {
         hotKeyModifiers = try container.decodeIfPresent(UInt.self, forKey: .hotKeyModifiers)
         customIcon = try container.decodeIfPresent(String.self, forKey: .customIcon)
         customColorHex = try container.decodeIfPresent(String.self, forKey: .customColorHex)
+        needsTrustConfirmation = try container.decodeIfPresent(Bool.self, forKey: .needsTrustConfirmation) ?? false
     }
 }
 
@@ -710,7 +715,7 @@ final class ShortcutStore: ObservableObject {
                     skipped.append(item.label)
                     continue
                 }
-                shortcuts.append(ScriptShortcut(label: item.label, scriptPath: destURL.path, sectionId: sectionId, kind: .script))
+                shortcuts.append(ScriptShortcut(label: item.label, scriptPath: destURL.path, sectionId: sectionId, kind: .script, needsTrustConfirmation: true))
             case .app:
                 guard let bundleId = item.bundleIdentifier,
                       let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else {
@@ -784,32 +789,71 @@ final class ShortcutStore: ObservableObject {
             return
         }
 
+        if shortcut.needsTrustConfirmation {
+            guard confirmTrust(for: shortcut) else { return }
+            if let index = shortcuts.firstIndex(where: { $0.id == shortcut.id }) {
+                shortcuts[index].needsTrustConfirmation = false
+                save()
+            }
+        }
+
         let terminal = preferredTerminal.isInstalled ? preferredTerminal : .terminal
-        let escapedPath = shortcut.scriptPath.replacingOccurrences(of: "\"", with: "\\\"")
+        // Single-quote the path for the shell (safe against $, `, ;, etc.), then escape
+        // the result for embedding inside the AppleScript string literal below.
+        let escapedPath = ShortcutStore.appleScriptEscaped(ShortcutStore.shellQuoted(shortcut.scriptPath))
         let script: String
+
+        // If the terminal app isn't running yet, `activate` launches it, which opens its
+        // own default blank window/tab. On that cold-launch path we reuse that existing
+        // tab directly instead of creating a new one — otherwise we'd end up with an
+        // extra blank tab/window racing the app's own startup. When the app was already
+        // running, we still add a new tab so we don't hijack whatever the user was doing.
+        let wasAlreadyRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: terminal.rawValue).isEmpty
 
         switch terminal {
         case .iterm:
-            script = """
-            tell application "iTerm"
-                activate
-                if (count of windows) = 0 then
-                    create window with default profile
-                else
-                    tell current window to create tab with default profile
-                end if
-                tell current session of current window
-                    write text "\\"\(escapedPath)\\""
+            if wasAlreadyRunning {
+                script = """
+                tell application "iTerm"
+                    activate
+                    if (count of windows) = 0 then
+                        create window with default profile
+                    else
+                        tell current window to create tab with default profile
+                    end if
+                    tell current session of current window
+                        write text "\(escapedPath)"
+                    end tell
                 end tell
-            end tell
-            """
+                """
+            } else {
+                script = """
+                tell application "iTerm"
+                    activate
+                    delay 0.6
+                    tell current session of current window
+                        write text "\(escapedPath)"
+                    end tell
+                end tell
+                """
+            }
         case .terminal:
-            script = """
-            tell application "Terminal"
-                activate
-                do script "\\"\(escapedPath)\\""
-            end tell
-            """
+            if wasAlreadyRunning {
+                script = """
+                tell application "Terminal"
+                    activate
+                    do script "\(escapedPath)"
+                end tell
+                """
+            } else {
+                script = """
+                tell application "Terminal"
+                    activate
+                    delay 0.6
+                    do script "\(escapedPath)" in front window
+                end tell
+                """
+            }
         case .warp, .alacritty, .kitty, .hyper:
             // These don't expose a reliable AppleScript "run command" verb;
             // just launch the app pointed at the script's folder.
@@ -859,5 +903,33 @@ final class ShortcutStore: ObservableObject {
         alert.messageText = title
         alert.informativeText = message
         alert.runModal()
+    }
+
+    /// Wraps a path in single quotes for safe use as a single shell argument —
+    /// neutralizes $, `, ;, and other shell metacharacters, not just quote chars.
+    private static func shellQuoted(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// Escapes a string for embedding inside an AppleScript double-quoted literal.
+    private static func appleScriptEscaped(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    /// First-run trust prompt for scripts that arrived via a .shorkut import rather
+    /// than a file the user explicitly picked themselves. Returns true to proceed.
+    private func confirmTrust(for shortcut: ScriptShortcut) -> Bool {
+        let preview = (try? String(contentsOfFile: shortcut.scriptPath, encoding: .utf8))
+            .map { String($0.prefix(400)) } ?? "(couldn't read script contents)"
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Run imported script “\(shortcut.label)”?"
+        alert.informativeText = "This script came from a .shorkut file someone shared with you and hasn't been run before. " +
+            "Review its contents before running:\n\n\(preview)\(preview.count >= 400 ? "…" : "")"
+        alert.addButton(withTitle: "Run")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 }

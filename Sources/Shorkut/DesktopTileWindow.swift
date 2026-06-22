@@ -154,6 +154,20 @@ extension Color {
     }
 }
 
+/// Caches per-path app icons so SwiftUI re-renders don't repeatedly hit
+/// NSWorkspace (icon lookup/rendering isn't free, and rows re-render often).
+final class AppIconCache {
+    static let shared = AppIconCache()
+    private var cache: [String: NSImage] = [:]
+
+    func icon(forFile path: String) -> NSImage {
+        if let cached = cache[path] { return cached }
+        let icon = NSWorkspace.shared.icon(forFile: path)
+        cache[path] = icon
+        return icon
+    }
+}
+
 struct ShortcutIcon: View {
     let shortcut: ScriptShortcut
 
@@ -166,7 +180,7 @@ struct ShortcutIcon: View {
         } else {
             switch shortcut.kind {
             case .app where FileManager.default.fileExists(atPath: shortcut.scriptPath):
-                Image(nsImage: NSWorkspace.shared.icon(forFile: shortcut.scriptPath))
+                Image(nsImage: AppIconCache.shared.icon(forFile: shortcut.scriptPath))
                     .resizable()
                     .scaledToFit()
             case .webpage:
