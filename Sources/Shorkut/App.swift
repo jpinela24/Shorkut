@@ -121,8 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.playFirstLaunchAnimationIfNeeded()
         tileWindow = window
 
-        HotKeyManager.shared.startIfEnabled()
         NotificationManager.shared.requestAuthorization()
+        UpdateChecker.shared.checkForUpdates(silent: true)
 
         if !OnboardingWindow.hasBeenShown {
             let onboarding = OnboardingWindow(appDelegate: self)

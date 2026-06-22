@@ -22,6 +22,8 @@ A native macOS menu-bar app and desktop widget for one-click shortcuts — scrip
 - **Template generator** — quickly build common shortcuts (SSH, curl, Docker, restart a service) from a form instead of writing a script by hand.
 - **Launch at login**, run notifications, and other small conveniences that make it feel like a normal Mac app.
 
+> **First launch on a new Mac:** Shorkut isn't notarized, so macOS will say it's from an unidentified developer. Right-click (or Control-click) the app → **Open** → **Open** again in the dialog — you only need to do this once.
+
 ## Building
 
 Requires Xcode Command Line Tools (Swift 5.10+, macOS 13 SDK or later).

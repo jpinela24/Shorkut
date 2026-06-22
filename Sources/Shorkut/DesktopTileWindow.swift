@@ -343,7 +343,7 @@ struct DesktopTileView: View {
                 store.promptToRenameShortcut(shortcut)
             }
             Button("Remove “\(shortcut.label)”", role: .destructive) {
-                store.removeShortcut(shortcut)
+                store.promptToRemoveShortcut(shortcut)
             }
         }
     }

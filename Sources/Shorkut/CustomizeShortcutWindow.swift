@@ -4,7 +4,7 @@ import AppKit
 final class CustomizeShortcutWindow: NSWindow {
     init(store: ShortcutStore, shortcut: ScriptShortcut) {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 280, height: 320),
+            contentRect: NSRect(x: 0, y: 0, width: 280, height: 360),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -30,6 +30,7 @@ private let iconChoices = [
 ]
 
 final class CustomizeShortcutModel: ObservableObject {
+    @Published var name: String = ""
     @Published var selectedIcon: String?
     @Published var selectedColor: Color = .green
 }
@@ -45,6 +46,12 @@ struct CustomizeShortcutView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Text("Name")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+            TextField("Shortcut name", text: $model.name)
+                .textFieldStyle(.roundedBorder)
+
             Text("Icon")
                 .font(.caption.bold())
                 .foregroundStyle(.secondary)
@@ -74,22 +81,24 @@ struct CustomizeShortcutView: View {
             Spacer()
 
             HStack {
-                Button("Reset to Default") {
-                    store.setCustomization(for: shortcut.id, icon: nil, colorHex: nil)
+                Button("Reset Icon") {
+                    store.setCustomization(for: shortcut.id, label: model.name, icon: nil, colorHex: nil)
                     onDone()
                 }
                 Spacer()
                 Button("Cancel") { onDone() }
                 Button("Save") {
-                    store.setCustomization(for: shortcut.id, icon: model.selectedIcon, colorHex: model.selectedColor.toHex())
+                    store.setCustomization(for: shortcut.id, label: model.name, icon: model.selectedIcon, colorHex: model.selectedColor.toHex())
                     onDone()
                 }
                 .keyboardShortcut(.defaultAction)
+                .disabled(model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(16)
-        .frame(width: 280, height: 320)
+        .frame(width: 280, height: 360)
         .onAppear {
+            model.name = shortcut.label
             model.selectedIcon = shortcut.customIcon ?? iconChoices.first
             model.selectedColor = shortcut.customColorHex.flatMap(Color.init(hex:)) ?? .green
         }

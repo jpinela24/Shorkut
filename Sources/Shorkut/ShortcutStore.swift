@@ -30,22 +30,18 @@ struct ScriptShortcut: Identifiable, Codable {
     var scriptPath: String
     var sectionId: UUID
     var kind: ShortcutKind
-    var hotKeyCode: UInt16?
-    var hotKeyModifiers: UInt?
     var customIcon: String?
     var customColorHex: String?
     /// True for scripts whose content arrived via a .shorkut import (not chosen
     /// directly by the user via a file picker). Gates a one-time trust prompt.
     var needsTrustConfirmation: Bool = false
 
-    init(id: UUID = UUID(), label: String, scriptPath: String, sectionId: UUID, kind: ShortcutKind = .script, hotKeyCode: UInt16? = nil, hotKeyModifiers: UInt? = nil, customIcon: String? = nil, customColorHex: String? = nil, needsTrustConfirmation: Bool = false) {
+    init(id: UUID = UUID(), label: String, scriptPath: String, sectionId: UUID, kind: ShortcutKind = .script, customIcon: String? = nil, customColorHex: String? = nil, needsTrustConfirmation: Bool = false) {
         self.id = id
         self.label = label
         self.scriptPath = scriptPath
         self.sectionId = sectionId
         self.kind = kind
-        self.hotKeyCode = hotKeyCode
-        self.hotKeyModifiers = hotKeyModifiers
         self.customIcon = customIcon
         self.customColorHex = customColorHex
         self.needsTrustConfirmation = needsTrustConfirmation
@@ -58,8 +54,6 @@ struct ScriptShortcut: Identifiable, Codable {
         scriptPath = try container.decode(String.self, forKey: .scriptPath)
         sectionId = try container.decode(UUID.self, forKey: .sectionId)
         kind = try container.decodeIfPresent(ShortcutKind.self, forKey: .kind) ?? .script
-        hotKeyCode = try container.decodeIfPresent(UInt16.self, forKey: .hotKeyCode)
-        hotKeyModifiers = try container.decodeIfPresent(UInt.self, forKey: .hotKeyModifiers)
         customIcon = try container.decodeIfPresent(String.self, forKey: .customIcon)
         customColorHex = try container.decodeIfPresent(String.self, forKey: .customColorHex)
         needsTrustConfirmation = try container.decodeIfPresent(Bool.self, forKey: .needsTrustConfirmation) ?? false
@@ -281,22 +275,12 @@ final class ShortcutStore: ObservableObject {
         save()
     }
 
-    func setHotKey(for shortcutId: UUID, keyCode: UInt16, modifiers: UInt) {
+    func setCustomization(for shortcutId: UUID, label: String, icon: String?, colorHex: String?) {
         guard let index = shortcuts.firstIndex(where: { $0.id == shortcutId }) else { return }
-        shortcuts[index].hotKeyCode = keyCode
-        shortcuts[index].hotKeyModifiers = modifiers
-        save()
-    }
-
-    func clearHotKey(for shortcutId: UUID) {
-        guard let index = shortcuts.firstIndex(where: { $0.id == shortcutId }) else { return }
-        shortcuts[index].hotKeyCode = nil
-        shortcuts[index].hotKeyModifiers = nil
-        save()
-    }
-
-    func setCustomization(for shortcutId: UUID, icon: String?, colorHex: String?) {
-        guard let index = shortcuts.firstIndex(where: { $0.id == shortcutId }) else { return }
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            shortcuts[index].label = trimmed
+        }
         shortcuts[index].customIcon = icon
         shortcuts[index].customColorHex = colorHex
         save()
@@ -551,6 +535,21 @@ final class ShortcutStore: ObservableObject {
         return nil
     }
 
+    func promptToRemoveShortcut(_ shortcut: ScriptShortcut) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Remove “\(shortcut.label)”?"
+        alert.informativeText = shortcut.kind == .script
+            ? "This will also delete its script file. This can't be undone."
+            : "This can't be undone."
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        removeShortcut(shortcut)
+    }
+
     func removeShortcut(_ shortcut: ScriptShortcut) {
         shortcuts.removeAll { $0.id == shortcut.id }
         if shortcut.kind == .script {
@@ -642,6 +641,17 @@ final class ShortcutStore: ObservableObject {
             return
         }
         promptToSaveExport(ShorkutExport(items: items), suggestedName: section.name)
+    }
+
+    /// Bundles every shortcut across every section into a single .shorkut file —
+    /// a one-click full backup, as opposed to exporting section by section.
+    func exportAllShortcuts() {
+        let items = shortcuts.compactMap { exportItem(for: $0) }
+        guard !items.isEmpty else {
+            ShortcutStore.showAlert(title: "Nothing to export", message: "You don't have any shortcuts yet.")
+            return
+        }
+        promptToSaveExport(ShorkutExport(items: items), suggestedName: "Shorkut Backup")
     }
 
     private func promptToSaveExport(_ export: ShorkutExport, suggestedName: String) {

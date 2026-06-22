@@ -87,7 +87,7 @@ struct GeneralTab: View {
     @ObservedObject var store: ShortcutStore
     @ObservedObject private var loginItem = LoginItemManager.shared
     @ObservedObject private var notifications = NotificationManager.shared
-    @ObservedObject private var hotKeyManager = HotKeyManager.shared
+    @ObservedObject private var updateChecker = UpdateChecker.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -100,16 +100,6 @@ struct GeneralTab: View {
                 get: { notifications.isEnabled },
                 set: { notifications.isEnabled = $0 }
             ))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Toggle("Enable global hotkeys", isOn: Binding(
-                    get: { hotKeyManager.isEnabled },
-                    set: { hotKeyManager.isEnabled = $0 }
-                ))
-                Text("Off by default — when on, Shorkut watches keystrokes system-wide to dispatch any shortcut you've assigned a hotkey.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
 
             Picker("Tile width", selection: Binding(
                 get: { store.tileWidthScale },
@@ -142,7 +132,16 @@ struct GeneralTab: View {
                 Button("Quit Shorkut") {
                     NSApplication.shared.terminate(nil)
                 }
+                Spacer()
+                Button(updateChecker.isChecking ? "Checking…" : "Check for Updates") {
+                    updateChecker.checkForUpdates()
+                }
+                .disabled(updateChecker.isChecking)
             }
+
+            Text("Shorkut \(updateChecker.currentVersion)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Divider()
 
@@ -167,49 +166,6 @@ struct GeneralTab: View {
 
 final class ShortcutSearchModel: ObservableObject {
     @Published var query: String = ""
-}
-
-struct HotKeyButton: View {
-    let shortcut: ScriptShortcut
-    @ObservedObject private var hotKeyManager = HotKeyManager.shared
-
-    private var isRecording: Bool { hotKeyManager.recordingShortcutId == shortcut.id }
-
-    var body: some View {
-        Button {
-            if isRecording {
-                hotKeyManager.cancelRecording()
-            } else {
-                hotKeyManager.startRecording(for: shortcut.id)
-            }
-        } label: {
-            if isRecording {
-                Text("Press keys…")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-            } else if let code = shortcut.hotKeyCode, let mods = shortcut.hotKeyModifiers {
-                Text(HotKeyManager.displayString(keyCode: code, modifiers: mods))
-                    .font(.caption2)
-                    .foregroundStyle(hotKeyManager.isEnabled ? .secondary : .tertiary)
-            } else {
-                Image(systemName: "keyboard")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            if shortcut.hotKeyCode != nil {
-                Button("Clear Hotkey") {
-                    ShortcutStore.shared.clearHotKey(for: shortcut.id)
-                }
-            }
-        }
-        .help(
-            isRecording ? "Press a key combo, or Esc to cancel" :
-            hotKeyManager.isEnabled ? "Click to set a global hotkey" :
-            "Click to set a hotkey (enable global hotkeys in Settings > General to use it)"
-        )
-    }
 }
 
 struct ShortcutsTab: View {
@@ -314,20 +270,13 @@ struct ShortcutsTab: View {
                                         .buttonStyle(.plain)
                                         Spacer()
                                         Button {
-                                            store.promptToRenameShortcut(shortcut)
+                                            appDelegate.showCustomizeShortcut(for: shortcut)
                                         } label: {
                                             Image(systemName: "pencil")
                                         }
                                         .buttonStyle(.plain)
                                         .foregroundStyle(.secondary)
-                                        Button {
-                                            appDelegate.showCustomizeShortcut(for: shortcut)
-                                        } label: {
-                                            Image(systemName: "paintbrush")
-                                        }
-                                        .buttonStyle(.plain)
-                                        .foregroundStyle(.secondary)
-                                        HotKeyButton(shortcut: shortcut)
+                                        .help("Edit name & icon")
                                         if shortcut.kind == .script {
                                             Button {
                                                 appDelegate.showScriptEditor(for: shortcut)
@@ -345,7 +294,7 @@ struct ShortcutsTab: View {
                                         .buttonStyle(.plain)
                                         .foregroundStyle(.secondary)
                                         Button {
-                                            store.removeShortcut(shortcut)
+                                            store.promptToRemoveShortcut(shortcut)
                                         } label: {
                                             Image(systemName: "minus.circle")
                                         }
@@ -436,10 +385,8 @@ struct ShortcutsTab: View {
                     Button("Import Shortcuts…") {
                         store.promptToImportShortcuts()
                     }
-                    Button("Export All Sections…") {
-                        for section in store.sections {
-                            store.exportSection(section)
-                        }
+                    Button("Export All as Backup…") {
+                        store.exportAllShortcuts()
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")

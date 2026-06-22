@@ -3,6 +3,7 @@ set -e
 cd "$(dirname "$0")"
 
 APP_NAME="Shorkut"
+APP_VERSION="1.0.0"
 INSTALL_DIR="/Applications"
 APP="build/$APP_NAME.app"
 LAUNCH_AGENT_LABEL="com.local.shorkut"
@@ -83,7 +84,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>$APP_VERSION</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSUIElement</key>
