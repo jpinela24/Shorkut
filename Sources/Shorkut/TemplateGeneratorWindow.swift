@@ -107,7 +107,7 @@ struct TemplateGeneratorView: View {
                 Spacer()
                 Button("Cancel") { onDone() }
                 Button("Create") {
-                    let targetSection = model.selectedSectionId ?? sectionId ?? store.sections.first?.id ?? ShortcutStore.generalSectionID
+                    let targetSection = model.selectedSectionId ?? sectionId ?? store.sections.first?.id
                     let name = model.label.isEmpty ? model.template.displayName : model.label
                     if store.addGeneratedShortcut(label: name, scriptContent: model.template.script(values: model.values), sectionId: targetSection) {
                         onDone()

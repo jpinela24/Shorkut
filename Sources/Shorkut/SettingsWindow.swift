@@ -209,6 +209,12 @@ struct ShortcutsTab: View {
                         if searchModel.query.isEmpty || !visibleShortcuts.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
+                                Image(systemName: "line.3.horizontal")
+                                    .foregroundStyle(.tertiary)
+                                    .help("Drag to reorder sections")
+                                    .onDrag {
+                                        shorkutDragProvider("section:\(group.section.id.uuidString)")
+                                    }
                                 Text(group.section.name)
                                     .font(.subheadline.bold())
                                     .padding(.vertical, 2)
@@ -305,15 +311,12 @@ struct ShortcutsTab: View {
                                     .padding(.horizontal, 4)
                                     .background(Color.primary.opacity(0.001)) // ensures full-row drag/drop hit-testing
                                     .onDrag {
-                                        NSItemProvider(object: shortcut.id.uuidString as NSString)
+                                        shorkutDragProvider(shortcut.id.uuidString)
                                     }
-                                    .onDrop(of: [.text], isTargeted: nil) { providers in
-                                        guard let provider = providers.first else { return false }
-                                        provider.loadObject(ofClass: NSString.self) { object, _ in
-                                            guard let idString = object as? String, let id = UUID(uuidString: idString) else { return }
-                                            DispatchQueue.main.async {
-                                                store.moveShortcut(id: id, toSection: group.section.id, beforeId: shortcut.id)
-                                            }
+                                    .onDrop(of: [UTType.shorkutDragPayload], isTargeted: nil) { providers in
+                                        loadShorkutDragPayload(from: providers) { raw in
+                                            guard let id = UUID(uuidString: raw) else { return }
+                                            store.moveShortcut(id: id, toSection: group.section.id, beforeId: shortcut.id)
                                         }
                                         return true
                                     }
@@ -325,11 +328,12 @@ struct ShortcutsTab: View {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .fill(Color.primary.opacity(0.03))
                         )
-                        .onDrop(of: [.text], isTargeted: nil) { providers in
-                            guard let provider = providers.first else { return false }
-                            provider.loadObject(ofClass: NSString.self) { object, _ in
-                                guard let idString = object as? String, let id = UUID(uuidString: idString) else { return }
-                                DispatchQueue.main.async {
+                        .onDrop(of: [UTType.shorkutDragPayload], isTargeted: nil) { providers in
+                            loadShorkutDragPayload(from: providers) { raw in
+                                if raw.hasPrefix("section:") {
+                                    guard let id = UUID(uuidString: String(raw.dropFirst("section:".count))) else { return }
+                                    store.moveSection(id: id, beforeId: group.section.id)
+                                } else if let id = UUID(uuidString: raw) {
                                     store.moveShortcut(id: id, toSection: group.section.id)
                                 }
                             }

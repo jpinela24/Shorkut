@@ -278,17 +278,11 @@ struct DesktopTileView: View {
             }
             .padding(4)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.001)))
-            .onDrag {
-                NSItemProvider(object: "section:\(section.id.uuidString)" as NSString)
-            }
-            .onDrop(of: [.text], isTargeted: nil) { providers in
-                guard let provider = providers.first else { return false }
-                provider.loadObject(ofClass: NSString.self) { object, _ in
-                    guard let raw = object as? String, raw.hasPrefix("section:"),
+            .onDrop(of: [UTType.shorkutDragPayload], isTargeted: nil) { providers in
+                loadShorkutDragPayload(from: providers) { raw in
+                    guard raw.hasPrefix("section:"),
                           let id = UUID(uuidString: String(raw.dropFirst("section:".count))) else { return }
-                    DispatchQueue.main.async {
-                        store.moveSection(id: id, beforeId: section.id)
-                    }
+                    store.moveSection(id: id, beforeId: section.id)
                 }
                 return true
             }
@@ -315,6 +309,9 @@ struct DesktopTileView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onDrag {
+            shorkutDragProvider("section:\(section.id.uuidString)")
+        }
         .contextMenu {
             Button("Rename Section…") {
                 store.promptToRenameSection(section)

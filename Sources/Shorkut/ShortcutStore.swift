@@ -6,6 +6,33 @@ extension UTType {
     static var shorkut: UTType {
         UTType(exportedAs: "com.local.shorkut.shorkut-file", conformingTo: .json)
     }
+
+    /// Internal-only drag payload for reordering shortcuts/sections. Deliberately
+    /// NOT plain text — Finder doesn't recognize this type, so dragging a
+    /// shortcut/section out of the app and releasing on the Desktop is simply
+    /// ignored instead of materializing a stray text-clipping/.inetloc file.
+    static var shorkutDragPayload: UTType {
+        UTType(exportedAs: "com.local.shorkut.drag-payload", conformingTo: .data)
+    }
+}
+
+/// Builds a drag NSItemProvider that only Shorkut's own onDrop targets understand.
+func shorkutDragProvider(_ payload: String) -> NSItemProvider {
+    let provider = NSItemProvider()
+    provider.registerDataRepresentation(forTypeIdentifier: UTType.shorkutDragPayload.identifier, visibility: .all) { completion in
+        completion(Data(payload.utf8), nil)
+        return nil
+    }
+    return provider
+}
+
+/// Reads a drag payload produced by `shorkutDragProvider`, if present.
+func loadShorkutDragPayload(from providers: [NSItemProvider], completion: @escaping (String) -> Void) {
+    guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.shorkutDragPayload.identifier) }) else { return }
+    provider.loadDataRepresentation(forTypeIdentifier: UTType.shorkutDragPayload.identifier) { data, _ in
+        guard let data, let string = String(data: data, encoding: .utf8) else { return }
+        DispatchQueue.main.async { completion(string) }
+    }
 }
 
 struct Section: Identifiable, Codable, Equatable {
@@ -299,12 +326,19 @@ final class ShortcutStore: ObservableObject {
         save()
     }
 
-    func promptToDeleteSection(_ section: Section) {
-        guard sections.count > 1 else {
-            ShortcutStore.showAlert(title: "Can't delete", message: "Shorkut needs at least one section.")
-            return
-        }
+    /// Returns the first existing section's id, creating a fresh "General"
+    /// section on the fly if Shorkut currently has none — so add/import flows
+    /// always have somewhere to put a new shortcut even after deleting all sections.
+    @discardableResult
+    private func ensureDefaultSection() -> UUID {
+        if let first = sections.first { return first.id }
+        let section = Section(name: "General")
+        sections.append(section)
+        save()
+        return section.id
+    }
 
+    func promptToDeleteSection(_ section: Section) {
         let count = shortcuts.filter { $0.sectionId == section.id }.count
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -351,6 +385,8 @@ final class ShortcutStore: ObservableObject {
         let targetSection: UUID
         if let sectionId {
             targetSection = sectionId
+        } else if sections.isEmpty {
+            targetSection = ensureDefaultSection()
         } else if sections.count == 1 {
             targetSection = sections[0].id
         } else if let chosen = ShortcutStore.promptForSection(sections) {
@@ -376,10 +412,10 @@ final class ShortcutStore: ObservableObject {
         let targetSection: UUID
         if let sectionId {
             targetSection = sectionId
-        } else if sections.count == 1 {
-            targetSection = sections[0].id
+        } else if sections.isEmpty {
+            targetSection = ensureDefaultSection()
         } else {
-            targetSection = sections.first?.id ?? ShortcutStore.generalSectionID
+            targetSection = sections[0].id
         }
 
         let destURL = ShortcutStore.scriptsDirectory.appendingPathComponent(sourceURL.lastPathComponent)
@@ -410,6 +446,8 @@ final class ShortcutStore: ObservableObject {
         let targetSection: UUID
         if let sectionId {
             targetSection = sectionId
+        } else if sections.isEmpty {
+            targetSection = ensureDefaultSection()
         } else if sections.count == 1 {
             targetSection = sections[0].id
         } else if let chosen = ShortcutStore.promptForSection(sections) {
@@ -435,6 +473,8 @@ final class ShortcutStore: ObservableObject {
         let targetSection: UUID
         if let sectionId {
             targetSection = sectionId
+        } else if sections.isEmpty {
+            targetSection = ensureDefaultSection()
         } else if sections.count == 1 {
             targetSection = sections[0].id
         } else if let chosen = ShortcutStore.promptForSection(sections) {
@@ -453,6 +493,8 @@ final class ShortcutStore: ObservableObject {
         let targetSection: UUID
         if let sectionId {
             targetSection = sectionId
+        } else if sections.isEmpty {
+            targetSection = ensureDefaultSection()
         } else if sections.count == 1 {
             targetSection = sections[0].id
         } else if let chosen = ShortcutStore.promptForSection(sections) {
@@ -593,7 +635,8 @@ final class ShortcutStore: ObservableObject {
     // MARK: - Generated shortcuts
 
     @discardableResult
-    func addGeneratedShortcut(label: String, scriptContent: String, sectionId: UUID) -> Bool {
+    func addGeneratedShortcut(label: String, scriptContent: String, sectionId: UUID?) -> Bool {
+        let targetSection = sectionId ?? ensureDefaultSection()
         let safeName = label.isEmpty ? "Shortcut" : label
         let destURL = ShortcutStore.scriptsDirectory.appendingPathComponent("\(safeName)-\(UUID().uuidString.prefix(6)).sh")
         do {
@@ -603,7 +646,7 @@ final class ShortcutStore: ObservableObject {
             ShortcutStore.showAlert(title: "Couldn't create shortcut", message: error.localizedDescription)
             return false
         }
-        shortcuts.append(ScriptShortcut(label: label, scriptPath: destURL.path, sectionId: sectionId, kind: .script))
+        shortcuts.append(ScriptShortcut(label: label, scriptPath: destURL.path, sectionId: targetSection, kind: .script))
         save()
         return true
     }
