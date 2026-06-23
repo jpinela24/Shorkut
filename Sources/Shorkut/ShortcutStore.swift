@@ -419,6 +419,19 @@ final class ShortcutStore: ObservableObject {
         }
 
         let destURL = ShortcutStore.scriptsDirectory.appendingPathComponent(sourceURL.lastPathComponent)
+        if FileManager.default.fileExists(atPath: destURL.path) {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "“\(sourceURL.lastPathComponent)” already exists"
+            alert.informativeText = "A script with this name is already managed by Shorkut" +
+                (shortcuts.contains(where: { $0.scriptPath == destURL.path }) ? " by an existing shortcut." : ".") +
+                " Replacing it will overwrite its contents."
+            alert.addButton(withTitle: "Replace")
+            alert.addButton(withTitle: "Cancel")
+            alert.buttons.first?.hasDestructiveAction = true
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+
         do {
             if FileManager.default.fileExists(atPath: destURL.path) {
                 try FileManager.default.removeItem(at: destURL)

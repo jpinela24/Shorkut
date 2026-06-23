@@ -122,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tileWindow = window
 
         NotificationManager.shared.requestAuthorization()
-        UpdateChecker.shared.checkForUpdates(silent: true)
+        UpdateChecker.shared.checkForUpdatesIfDue()
 
         if !OnboardingWindow.hasBeenShown {
             let onboarding = OnboardingWindow(appDelegate: self)

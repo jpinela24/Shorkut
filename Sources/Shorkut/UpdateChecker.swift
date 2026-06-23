@@ -9,6 +9,8 @@ final class UpdateChecker: ObservableObject {
 
     private static let releasesAPIURL = URL(string: "https://api.github.com/repos/jpinela24/Shorkut/releases/latest")!
     private static let releasesPageURL = URL(string: "https://github.com/jpinela24/Shorkut/releases/latest")!
+    private static let lastAutoCheckDefaultsKey = "ShorkutLastAutoUpdateCheck"
+    private static let autoCheckInterval: TimeInterval = 24 * 60 * 60
 
     @Published var isChecking = false
 
@@ -19,6 +21,16 @@ final class UpdateChecker: ObservableObject {
 
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+    }
+
+    /// Launch-time check — throttled to once per day so restarting the app
+    /// repeatedly (e.g. while testing a build) doesn't burn through GitHub's
+    /// unauthenticated API rate limit (60 requests/hour per IP).
+    func checkForUpdatesIfDue() {
+        let last = UserDefaults.standard.double(forKey: Self.lastAutoCheckDefaultsKey)
+        guard Date().timeIntervalSince1970 - last >= Self.autoCheckInterval else { return }
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastAutoCheckDefaultsKey)
+        checkForUpdates(silent: true)
     }
 
     /// `silent` suppresses the "you're up to date" / error alerts, used for

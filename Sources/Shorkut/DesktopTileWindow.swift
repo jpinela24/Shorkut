@@ -216,32 +216,39 @@ struct DesktopTileView: View {
     }
 
     var body: some View {
-        Group {
-            if store.shortcuts.isEmpty {
-                Text("Add shortcuts from the menu bar icon")
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.leading)
-                    .frame(minHeight: 130, alignment: .center)
-            } else if columnCount == 1 {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(store.sections) { section in
-                        sectionBlock(section)
-                    }
-                }
-            } else {
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(0..<columnCount, id: \.self) { col in
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(sectionsForColumn(col)) { section in
-                                sectionBlock(section)
-                            }
+        // ScrollView + maxHeight is the standard SwiftUI "grow naturally, then
+        // scroll once capped" pattern: below the cap it sizes exactly to its
+        // content (no visible scrollbar, behaves like a plain stack); past the
+        // cap it becomes scrollable instead of silently clipping unreachable rows.
+        ScrollView(showsIndicators: false) {
+            Group {
+                if store.shortcuts.isEmpty {
+                    Text("Add shortcuts from the menu bar icon")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.leading)
+                        .frame(minHeight: 130, alignment: .center)
+                } else if columnCount == 1 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(store.sections) { section in
+                            sectionBlock(section)
                         }
-                        .frame(width: DesktopTileWindow.baseWidth - 28, alignment: .topLeading)
+                    }
+                } else {
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(0..<columnCount, id: \.self) { col in
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(sectionsForColumn(col)) { section in
+                                    sectionBlock(section)
+                                }
+                            }
+                            .frame(width: DesktopTileWindow.baseWidth - 28, alignment: .topLeading)
+                        }
                     }
                 }
             }
         }
+        .frame(maxHeight: DesktopTileWindow.maxTileHeight - 28)
         .padding(14)
         .frame(width: DesktopTileWindow.baseWidth * CGFloat(columnCount), alignment: .topLeading)
         .background(
