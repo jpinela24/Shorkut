@@ -55,23 +55,36 @@ enum ShortcutTemplate: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Wraps a value in single quotes so it's inserted as one shell argument,
+    /// neutralizing spaces, `$`, backticks, `;`, etc. (single quotes themselves
+    /// are escaped by closing, inserting an escaped quote, and reopening).
+    private static func shellQuoted(_ raw: String) -> String {
+        "'" + raw.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     func script(values: [String: String]) -> String {
         func value(_ key: String) -> String {
             values[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        func quoted(_ key: String) -> String {
+            Self.shellQuoted(value(key))
         }
 
         let body: String
         switch self {
         case .ssh:
             let port = value("port").isEmpty ? "22" : value("port")
-            body = "ssh -p \(port) \(value("user"))@\(value("host"))"
+            body = "ssh -p \(Self.shellQuoted(port)) \(quoted("user"))@\(quoted("host"))"
         case .curl:
-            body = "curl -s -X \(value("method").isEmpty ? "GET" : value("method")) \"\(value("url"))\""
+            let method = value("method").isEmpty ? "GET" : value("method")
+            body = "curl -s -X \(Self.shellQuoted(method)) \(quoted("url"))"
         case .dockerRestart:
-            body = "docker restart \(value("container"))"
+            body = "docker restart \(quoted("container"))"
         case .restartLaunchAgent:
-            body = "launchctl kickstart -k gui/$(id -u)/\(value("label"))"
+            body = "launchctl kickstart -k gui/$(id -u)/\(quoted("label"))"
         case .customCommand:
+            // Intentionally unquoted — this field is a full shell command the
+            // user is writing on purpose, not a single token to neutralize.
             body = value("command")
         }
 

@@ -3,7 +3,11 @@ set -e
 cd "$(dirname "$0")"
 
 APP_NAME="Shorkut"
-APP_VERSION="1.0.0"
+# Derived from the latest git tag (e.g. v1.0.0 -> 1.0.0) so the bundled
+# version can't silently drift from what's actually been released; falls
+# back to 1.0.0 only if no tags exist yet (e.g. a fresh clone with no tags fetched).
+APP_VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || true)"
+APP_VERSION="${APP_VERSION:-1.0.0}"
 INSTALL_DIR="/Applications"
 APP="build/$APP_NAME.app"
 LAUNCH_AGENT_LABEL="com.local.shorkut"

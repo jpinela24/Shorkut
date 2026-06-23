@@ -99,7 +99,7 @@ struct CustomizeShortcutView: View {
         .frame(width: 280, height: 360)
         .onAppear {
             model.name = shortcut.label
-            model.selectedIcon = shortcut.customIcon ?? iconChoices.first
+            model.selectedIcon = shortcut.customIcon
             model.selectedColor = shortcut.customColorHex.flatMap(Color.init(hex:)) ?? .green
         }
     }
