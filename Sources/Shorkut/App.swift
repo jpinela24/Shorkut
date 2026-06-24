@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 private let menuBarIcon: NSImage = {
     if let path = Bundle.main.path(forResource: "MenuBarIcon", ofType: "png"),
@@ -32,9 +33,13 @@ struct ShorkutApp: App {
                 get: { state.isLocked },
                 set: { newValue in
                     state.isLocked = newValue
-                    appDelegate.tileWindow?.setLocked(newValue)
+                    appDelegate.tileWindows.forEach { $0.setLocked(newValue) }
                 }
             ))
+
+            Button("Add Another Tile") {
+                ShortcutStore.shared.addTile()
+            }
 
             Divider()
 
@@ -53,7 +58,8 @@ struct ShorkutApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    var tileWindow: DesktopTileWindow?
+    var tileWindows: [DesktopTileWindow] = []
+    private var tilesCancellable: AnyCancellable?
     var templateWindow: TemplateGeneratorWindow?
     var settingsWindow: SettingsWindow?
     var scriptEditorWindow: ScriptEditorWindow?
@@ -92,6 +98,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Keeps actual NSWindow instances in sync with `store.tiles` — the array
+    /// is the single source of truth (configurable from Settings > Tiles or the
+    /// tile's own right-click menu); this just reacts to it.
+    private func syncTileWindows(to tiles: [TileConfig]) {
+        let desiredIds = Set(tiles.map { $0.id })
+        let removed = tileWindows.filter { !desiredIds.contains($0.id) }
+        removed.forEach { window in
+            window.close()
+            DesktopTileWindow.removeSavedOrigin(for: window.id)
+        }
+        tileWindows.removeAll { !desiredIds.contains($0.id) }
+
+        let existingIds = Set(tileWindows.map { $0.id })
+        for tile in tiles where !existingIds.contains(tile.id) {
+            let window = DesktopTileWindow(store: ShortcutStore.shared, id: tile.id)
+            window.orderFrontRegardless()
+            tileWindows.append(window)
+        }
+    }
+
     func restartApp() {
         let appURL = Bundle.main.bundleURL
         let config = NSWorkspace.OpenConfiguration()
@@ -116,10 +142,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        let window = DesktopTileWindow(store: ShortcutStore.shared)
-        window.orderFrontRegardless()
-        window.playFirstLaunchAnimationIfNeeded()
-        tileWindow = window
+        DesktopIconGrid.refreshFromFinderIfNeeded()
+
+        let store = ShortcutStore.shared
+        syncTileWindows(to: store.tiles)
+        tileWindows.first?.playFirstLaunchAnimationIfNeeded()
+        tilesCancellable = store.$tiles
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] tiles in
+                self?.syncTileWindows(to: tiles)
+            }
 
         NotificationManager.shared.requestAuthorization()
         UpdateChecker.shared.checkForUpdatesIfDue()

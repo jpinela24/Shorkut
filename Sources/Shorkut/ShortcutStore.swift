@@ -26,6 +26,15 @@ func shorkutDragProvider(_ payload: String) -> NSItemProvider {
     return provider
 }
 
+/// Per-tile configuration: which desktop tile windows exist and what each shows.
+/// `sectionIds == nil` means "mirror everything" (the default); a non-nil set
+/// makes the tile independent, showing only those sections.
+struct TileConfig: Identifiable, Codable, Equatable {
+    var id: String
+    var name: String
+    var sectionIds: Set<UUID>?
+}
+
 /// Reads a drag payload produced by `shorkutDragProvider`, if present.
 func loadShorkutDragPayload(from providers: [NSItemProvider], completion: @escaping (String) -> Void) {
     guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.shorkutDragPayload.identifier) }) else { return }
@@ -174,6 +183,8 @@ final class ShortcutStore: ObservableObject {
     @Published var preferredBrowser: BrowserApp?
     @Published var collapsedSectionIds: Set<UUID> = []
     @Published var tileWidthScale: Int = 1
+    @Published var autoResizeTile: Bool = true
+    @Published var tiles: [TileConfig] = [TileConfig(id: DesktopTileWindow.primaryTileId, name: "Tile 1", sectionIds: nil)]
 
     private static let sectionsDefaultsKey = "ShorkutSections"
     private static let shortcutsDefaultsKey = "ShorkutScriptShortcuts"
@@ -181,6 +192,11 @@ final class ShortcutStore: ObservableObject {
     private static let preferredBrowserDefaultsKey = "ShorkutPreferredBrowser"
     private static let collapsedSectionsDefaultsKey = "ShorkutCollapsedSections"
     private static let tileWidthScaleDefaultsKey = "ShorkutTileWidthScale"
+    private static let autoResizeTileDefaultsKey = "ShorkutAutoResizeTile"
+    private static let tilesDefaultsKey = "ShorkutTiles"
+    /// Legacy key from before per-tile config existed — just a flat list of tile
+    /// ids with no per-tile settings. Migrated into `tiles` on first load.
+    private static let legacyTileIdsDefaultsKey = "ShorkutTileIds"
 
     private static var scriptsDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -204,6 +220,9 @@ final class ShortcutStore: ObservableObject {
         }
         let savedScale = UserDefaults.standard.integer(forKey: ShortcutStore.tileWidthScaleDefaultsKey)
         tileWidthScale = (1...3).contains(savedScale) ? savedScale : 1
+        if UserDefaults.standard.object(forKey: ShortcutStore.autoResizeTileDefaultsKey) != nil {
+            autoResizeTile = UserDefaults.standard.bool(forKey: ShortcutStore.autoResizeTileDefaultsKey)
+        }
         load()
     }
 
@@ -215,6 +234,11 @@ final class ShortcutStore: ObservableObject {
     func setTileWidthScale(_ scale: Int) {
         tileWidthScale = scale
         UserDefaults.standard.set(scale, forKey: ShortcutStore.tileWidthScaleDefaultsKey)
+    }
+
+    func setAutoResizeTile(_ enabled: Bool) {
+        autoResizeTile = enabled
+        UserDefaults.standard.set(enabled, forKey: ShortcutStore.autoResizeTileDefaultsKey)
     }
 
     func setPreferredBrowser(_ app: BrowserApp?) {
@@ -254,6 +278,18 @@ final class ShortcutStore: ObservableObject {
         if let strings = UserDefaults.standard.stringArray(forKey: ShortcutStore.collapsedSectionsDefaultsKey) {
             collapsedSectionIds = Set(strings.compactMap { UUID(uuidString: $0) })
         }
+        if let data = UserDefaults.standard.data(forKey: ShortcutStore.tilesDefaultsKey),
+           let decoded = try? JSONDecoder().decode([TileConfig].self, from: data),
+           !decoded.isEmpty {
+            tiles = decoded
+        } else if let legacyIds = UserDefaults.standard.stringArray(forKey: ShortcutStore.legacyTileIdsDefaultsKey),
+                  !legacyIds.isEmpty {
+            // Migrate from the pre-TileConfig flat id list (no per-tile settings existed yet).
+            tiles = legacyIds.enumerated().map { index, id in
+                TileConfig(id: id, name: "Tile \(index + 1)", sectionIds: nil)
+            }
+            saveTiles()
+        }
     }
 
     private func save() {
@@ -263,6 +299,70 @@ final class ShortcutStore: ObservableObject {
         if let data = try? JSONEncoder().encode(shortcuts) {
             UserDefaults.standard.set(data, forKey: ShortcutStore.shortcutsDefaultsKey)
         }
+    }
+
+    private func saveTiles() {
+        if let data = try? JSONEncoder().encode(tiles) {
+            UserDefaults.standard.set(data, forKey: ShortcutStore.tilesDefaultsKey)
+        }
+    }
+
+    // MARK: - Tiles
+
+    func visibleShortcutCount(for tile: TileConfig) -> Int {
+        let allowedSectionIds = tile.sectionIds ?? Set(sections.map { $0.id })
+        return shortcuts.filter { allowedSectionIds.contains($0.sectionId) }.count
+    }
+
+    /// Guards against spamming empty tiles across the screen — every existing
+    /// tile needs at least one visible shortcut before another can be added.
+    var canAddTile: Bool {
+        tiles.allSatisfy { visibleShortcutCount(for: $0) >= 1 }
+    }
+
+    func addTile() {
+        guard canAddTile else {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Add some shortcuts first"
+            alert.informativeText = "Every existing tile needs at least one shortcut before you can add another tile."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+        let number = tiles.count + 1
+        tiles.append(TileConfig(id: UUID().uuidString, name: "Tile \(number)", sectionIds: nil))
+        saveTiles()
+    }
+
+    func removeTile(id: String) {
+        tiles.removeAll { $0.id == id }
+        saveTiles()
+    }
+
+    func renameTile(id: String, name: String) {
+        guard let index = tiles.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        tiles[index].name = trimmed
+        saveTiles()
+    }
+
+    func promptToRenameTile(_ tile: TileConfig) {
+        guard let newName = ShortcutStore.promptForText(
+            title: "Rename Tile",
+            message: "New name for “\(tile.name)”:",
+            defaultValue: tile.name
+        ), !newName.isEmpty else { return }
+        renameTile(id: tile.id, name: newName)
+    }
+
+    /// `nil` makes the tile mirror everything again; a non-nil set (even empty)
+    /// makes it independent, showing only those sections.
+    func setTileSections(id: String, sectionIds: Set<UUID>?) {
+        guard let index = tiles.firstIndex(where: { $0.id == id }) else { return }
+        tiles[index].sectionIds = sectionIds
+        saveTiles()
     }
 
     // MARK: - Sections

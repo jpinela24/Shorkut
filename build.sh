@@ -97,6 +97,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Shorkut asks Finder for your desktop icon size so tiles can snap to the same grid as your desktop icons.</string>
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>

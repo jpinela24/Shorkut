@@ -4,15 +4,20 @@ import Combine
 import UniformTypeIdentifiers
 
 final class DesktopTileWindow: NSWindow, NSWindowDelegate {
-    private static let originDefaultsKey = "SSHWidgetTileOrigin"
+    private static let originDefaultsKeyPrefix = "SSHWidgetTileOrigin"
     private static let firstLaunchAnimationKey = "ShorkutTileFirstLaunchAnimationShown"
     static let lockedDefaultsKey = "SSHWidgetTileLocked"
+    /// The very first tile ever created keeps the original unsuffixed defaults
+    /// key, so upgrading from a single-tile version doesn't lose its position.
+    static let primaryTileId = "primary"
     static let baseWidth: CGFloat = 164
     static let tileSize = NSSize(width: baseWidth, height: 164)
     static let maxTileHeight: CGFloat = 600
 
+    let id: String
     private var hostingView: NSHostingView<DesktopTileView>!
     private var cancellable: AnyCancellable?
+    private var snapDebounceTimer: Timer?
     private let store: ShortcutStore
 
     static var isLocked: Bool {
@@ -23,8 +28,9 @@ final class DesktopTileWindow: NSWindow, NSWindowDelegate {
         DesktopTileWindow.baseWidth * CGFloat(max(1, min(3, store.tileWidthScale)))
     }
 
-    init(store: ShortcutStore) {
+    init(store: ShortcutStore, id: String = DesktopTileWindow.primaryTileId) {
         self.store = store
+        self.id = id
         let size = NSSize(width: DesktopTileWindow.baseWidth * CGFloat(max(1, min(3, store.tileWidthScale))), height: DesktopTileWindow.tileSize.height)
         super.init(
             contentRect: NSRect(origin: .zero, size: size),
@@ -43,7 +49,7 @@ final class DesktopTileWindow: NSWindow, NSWindowDelegate {
         // but still below normal app windows, so it behaves like a real desktop widget.
         level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
 
-        let hosting = NSHostingView(rootView: DesktopTileView(store: store))
+        let hosting = NSHostingView(rootView: DesktopTileView(store: store, tileId: id))
         hosting.frame = NSRect(origin: .zero, size: size)
         hosting.wantsLayer = true
         hostingView = hosting
@@ -51,11 +57,11 @@ final class DesktopTileWindow: NSWindow, NSWindowDelegate {
 
         delegate = self
 
-        if let savedOrigin = DesktopTileWindow.savedOrigin() {
+        if let savedOrigin = DesktopTileWindow.savedOrigin(for: id) {
             setFrameOrigin(savedOrigin)
         } else if let screen = NSScreen.main {
-            let x = screen.frame.minX + 24
-            let y = screen.frame.maxY - size.height - 60
+            let x = screen.frame.minX + 24 + (id == DesktopTileWindow.primaryTileId ? 0 : CGFloat.random(in: 40...160))
+            let y = screen.frame.maxY - size.height - 60 - (id == DesktopTileWindow.primaryTileId ? 0 : CGFloat.random(in: 40...160))
             setFrameOrigin(NSPoint(x: x, y: y))
         }
 
@@ -99,14 +105,50 @@ final class DesktopTileWindow: NSWindow, NSWindowDelegate {
     }
 
     func windowDidMove(_ notification: Notification) {
-        DesktopTileWindow.saveOrigin(frame.origin)
+        DesktopTileWindow.saveOrigin(frame.origin, for: id)
+        // Snap to the desktop-icon-style grid once dragging settles, rather than
+        // on every move event (which would fight the user's hand mid-drag).
+        snapDebounceTimer?.invalidate()
+        snapDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
+            self?.snapToGridIfNeeded()
+        }
+    }
+
+    /// Finder lays desktop icons out from the top-right corner of the screen,
+    /// so the snap grid is anchored there too instead of the screen's
+    /// bottom-left origin — otherwise the grid lines tiles fall into don't
+    /// line up with where real desktop icons sit.
+    private func snapToGridIfNeeded() {
+        guard !DesktopTileWindow.isLocked else { return }
+        guard let screen = screen ?? NSScreen.main else { return }
+        let cellWidth = DesktopIconGrid.cellWidth
+        let cellHeight = DesktopIconGrid.cellHeight
+        let anchor = NSPoint(x: screen.visibleFrame.maxX, y: screen.visibleFrame.maxY)
+
+        let offsetX = anchor.x - frame.origin.x
+        let offsetY = anchor.y - frame.origin.y
+        let snappedOffsetX = (offsetX / cellWidth).rounded() * cellWidth
+        let snappedOffsetY = (offsetY / cellHeight).rounded() * cellHeight
+
+        let snappedX = anchor.x - snappedOffsetX
+        let snappedY = anchor.y - snappedOffsetY
+        guard abs(snappedX - frame.origin.x) > 0.5 || abs(snappedY - frame.origin.y) > 0.5 else { return }
+        setFrameOrigin(NSPoint(x: snappedX, y: snappedY))
+        DesktopTileWindow.saveOrigin(frame.origin, for: id)
     }
 
     /// Grows/shrinks the tile to fit its shortcut list and chosen width, keeping the
     /// top-left corner anchored so it always expands downward/rightward, never re-centering.
+    /// When auto-resize is turned off, the tile stays pinned at its original size and
+    /// any overflow scrolls inside it instead (see DesktopTileView's ScrollView).
     private func resizeToFitContent() {
-        let fitting = hostingView.fittingSize
-        let newHeight = min(max(fitting.height, DesktopTileWindow.tileSize.height), DesktopTileWindow.maxTileHeight)
+        let newHeight: CGFloat
+        if store.autoResizeTile {
+            let fitting = hostingView.fittingSize
+            newHeight = min(max(fitting.height, DesktopTileWindow.tileSize.height), DesktopTileWindow.maxTileHeight)
+        } else {
+            newHeight = DesktopTileWindow.tileSize.height
+        }
         let newSize = NSSize(width: currentWidth, height: newHeight)
 
         guard abs(newSize.height - frame.height) > 0.5 || abs(newSize.width - frame.width) > 0.5 else { return }
@@ -122,15 +164,23 @@ final class DesktopTileWindow: NSWindow, NSWindowDelegate {
         isMovableByWindowBackground = !locked
     }
 
-    private static func savedOrigin() -> NSPoint? {
-        guard let str = UserDefaults.standard.string(forKey: originDefaultsKey) else { return nil }
+    private static func defaultsKey(for id: String) -> String {
+        id == primaryTileId ? originDefaultsKeyPrefix : "\(originDefaultsKeyPrefix)-\(id)"
+    }
+
+    private static func savedOrigin(for id: String) -> NSPoint? {
+        guard let str = UserDefaults.standard.string(forKey: defaultsKey(for: id)) else { return nil }
         let parts = str.split(separator: ",").compactMap { Double($0) }
         guard parts.count == 2 else { return nil }
         return NSPoint(x: parts[0], y: parts[1])
     }
 
-    private static func saveOrigin(_ point: NSPoint) {
-        UserDefaults.standard.set("\(point.x),\(point.y)", forKey: originDefaultsKey)
+    private static func saveOrigin(_ point: NSPoint, for id: String) {
+        UserDefaults.standard.set("\(point.x),\(point.y)", forKey: defaultsKey(for: id))
+    }
+
+    static func removeSavedOrigin(for id: String) {
+        UserDefaults.standard.removeObject(forKey: defaultsKey(for: id))
     }
 }
 
@@ -204,15 +254,30 @@ struct ShortcutIcon: View {
 
 struct DesktopTileView: View {
     @ObservedObject var store: ShortcutStore
+    let tileId: String
 
     private var columnCount: Int { max(1, min(3, store.tileWidthScale)) }
+
+    /// Sections this specific tile should show — everything, unless this tile
+    /// has been made independent with its own section selection.
+    private var visibleSections: [Section] {
+        guard let allowed = store.tiles.first(where: { $0.id == tileId })?.sectionIds else {
+            return store.sections
+        }
+        return store.sections.filter { allowed.contains($0.id) }
+    }
+
+    private var visibleShortcuts: [ScriptShortcut] {
+        let sectionIds = Set(visibleSections.map { $0.id })
+        return store.shortcuts.filter { sectionIds.contains($0.sectionId) }
+    }
 
     private func shortcuts(for section: Section) -> [ScriptShortcut] {
         store.shortcuts.filter { $0.sectionId == section.id }
     }
 
     private func sectionsForColumn(_ col: Int) -> [Section] {
-        store.sections.enumerated().filter { $0.offset % columnCount == col }.map { $0.element }
+        visibleSections.enumerated().filter { $0.offset % columnCount == col }.map { $0.element }
     }
 
     var body: some View {
@@ -222,7 +287,7 @@ struct DesktopTileView: View {
         // cap it becomes scrollable instead of silently clipping unreachable rows.
         ScrollView(showsIndicators: false) {
             Group {
-                if store.shortcuts.isEmpty {
+                if visibleShortcuts.isEmpty {
                     Text("Add shortcuts from the menu bar icon")
                         .font(.system(size: 9.5))
                         .foregroundStyle(.tertiary)
@@ -230,7 +295,7 @@ struct DesktopTileView: View {
                         .frame(minHeight: 130, alignment: .center)
                 } else if columnCount == 1 {
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(store.sections) { section in
+                        ForEach(visibleSections) { section in
                             sectionBlock(section)
                         }
                     }
@@ -248,7 +313,7 @@ struct DesktopTileView: View {
                 }
             }
         }
-        .frame(maxHeight: DesktopTileWindow.maxTileHeight - 28)
+        .frame(maxHeight: (store.autoResizeTile ? DesktopTileWindow.maxTileHeight : DesktopTileWindow.tileSize.height) - 28)
         .padding(14)
         .frame(width: DesktopTileWindow.baseWidth * CGFloat(columnCount), alignment: .topLeading)
         .background(
@@ -268,6 +333,10 @@ struct DesktopTileView: View {
                 }
             }
             return true
+        }
+        .contextMenu {
+            Button("Add Another Tile") { store.addTile() }
+            Button("Remove This Tile") { store.removeTile(id: tileId) }
         }
     }
 

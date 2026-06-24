@@ -50,6 +50,8 @@ struct SettingsView: View {
                     RunSettingsTab(store: store)
                 case .general:
                     GeneralTab(appDelegate: appDelegate, store: store)
+                case .tiles:
+                    TilesTab(store: store)
                 }
             }
             .padding(16)
@@ -63,6 +65,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case shortcuts
     case importFile
     case runSettings
+    case tiles
 
     var id: String { rawValue }
 
@@ -72,6 +75,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .shortcuts: return "Shortcuts"
         case .importFile: return "Import"
         case .runSettings: return "Run Settings"
+        case .tiles: return "Tiles"
         }
     }
 }
@@ -101,16 +105,9 @@ struct GeneralTab: View {
                 set: { notifications.isEnabled = $0 }
             ))
 
-            Picker("Tile width", selection: Binding(
-                get: { store.tileWidthScale },
-                set: { store.setTileWidthScale($0) }
-            )) {
-                Text("1 tile").tag(1)
-                Text("2 tiles").tag(2)
-                Text("3 tiles").tag(3)
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 240)
+            Text("Tile width, auto-resize, and per-tile setup now live in the Tiles tab.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Divider()
 
@@ -474,6 +471,144 @@ struct ImportTab: View {
             }
             return true
         }
+    }
+}
+
+// MARK: - Tiles tab
+
+struct TilesTab: View {
+    @ObservedObject var store: ShortcutStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Picker("Tile width", selection: Binding(
+                get: { store.tileWidthScale },
+                set: { store.setTileWidthScale($0) }
+            )) {
+                Text("1 tile").tag(1)
+                Text("2 tiles").tag(2)
+                Text("3 tiles").tag(3)
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 240)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Auto-resize tile to fit content", isOn: Binding(
+                    get: { store.autoResizeTile },
+                    set: { store.setAutoResizeTile($0) }
+                ))
+                Text("Off keeps the tile at its original size and scrolls if shortcuts overflow, instead of growing/shrinking automatically.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            Text("Every tile mirrors all your sections by default. Make a tile independent to choose exactly which sections it shows.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(store.tiles) { tile in
+                        TileConfigRow(store: store, tile: tile)
+                    }
+                }
+            }
+
+            Button {
+                store.addTile()
+            } label: {
+                Label("Add Tile", systemImage: "plus.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .disabled(!store.canAddTile)
+            .help(store.canAddTile ? "Add another tile" : "Every existing tile needs at least one shortcut first")
+        }
+        .padding(.top, 8)
+    }
+}
+
+private struct TileConfigRow: View {
+    @ObservedObject var store: ShortcutStore
+    let tile: TileConfig
+
+    private var isIndependent: Bool { tile.sectionIds != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Button {
+                    store.promptToRenameTile(tile)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(tile.name).font(.subheadline.bold())
+                        Image(systemName: "pencil")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Toggle("Independent", isOn: Binding(
+                    get: { isIndependent },
+                    set: { newValue in
+                        store.setTileSections(id: tile.id, sectionIds: newValue ? Set(store.sections.map { $0.id }) : nil)
+                    }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+
+                Button(role: .destructive) {
+                    store.removeTile(id: tile.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .disabled(store.tiles.count <= 1)
+                .help(store.tiles.count <= 1 ? "At least one tile must exist" : "Remove this tile")
+            }
+
+            if isIndependent {
+                FlowSectionPicker(store: store, tile: tile)
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.03)))
+    }
+}
+
+private struct FlowSectionPicker: View {
+    @ObservedObject var store: ShortcutStore
+    let tile: TileConfig
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(store.sections) { section in
+                let selected = tile.sectionIds?.contains(section.id) ?? false
+                Button {
+                    var current = tile.sectionIds ?? []
+                    if selected {
+                        current.remove(section.id)
+                    } else {
+                        current.insert(section.id)
+                    }
+                    store.setTileSections(id: tile.id, sectionIds: current)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: selected ? "checkmark.square.fill" : "square")
+                            .foregroundStyle(selected ? Color.accentColor : .secondary)
+                        Text(section.name)
+                            .font(.caption)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.leading, 8)
     }
 }
 
