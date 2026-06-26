@@ -266,7 +266,7 @@ struct ShortcutsTab: View {
                                 ForEach(visibleShortcuts) { shortcut in
                                     HStack {
                                         ShortcutIcon(shortcut: shortcut)
-                                            .frame(width: 16, height: 16)
+                                            .frame(width: 18, height: 18)
                                         Button(shortcut.label) {
                                             store.run(shortcut)
                                         }
@@ -501,6 +501,40 @@ struct TilesTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Drag snap grid").font(.subheadline.bold())
+                    Spacer()
+                    Button("Match Finder") {
+                        store.matchFinderGrid()
+                    }
+                    .controlSize(.small)
+                }
+                Text("Finder doesn't expose its grid-spacing setting directly, so this is an approximation based on your icon size. Nudge the sliders if dragging a tile doesn't quite line up with your desktop icons.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    Text("Width").frame(width: 50, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { store.gridCellWidth },
+                        set: { store.setGridCellWidth($0) }
+                    ), in: 50...160, step: 1)
+                    Text("\(Int(store.gridCellWidth))").frame(width: 32, alignment: .trailing).font(.caption.monospacedDigit())
+                }
+                HStack {
+                    Text("Height").frame(width: 50, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { store.gridCellHeight },
+                        set: { store.setGridCellHeight($0) }
+                    ), in: 50...160, step: 1)
+                    Text("\(Int(store.gridCellHeight))").frame(width: 32, alignment: .trailing).font(.caption.monospacedDigit())
+                }
+            }
+            .frame(maxWidth: 420)
 
             Divider()
 

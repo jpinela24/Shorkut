@@ -121,8 +121,8 @@ final class DesktopTileWindow: NSWindow, NSWindowDelegate {
     private func snapToGridIfNeeded() {
         guard !DesktopTileWindow.isLocked else { return }
         guard let screen = screen ?? NSScreen.main else { return }
-        let cellWidth = DesktopIconGrid.cellWidth
-        let cellHeight = DesktopIconGrid.cellHeight
+        let cellWidth = store.gridCellWidth
+        let cellHeight = store.gridCellHeight
         let anchor = NSPoint(x: screen.visibleFrame.maxX, y: screen.visibleFrame.maxY)
 
         let offsetX = anchor.x - frame.origin.x
@@ -401,7 +401,7 @@ struct DesktopTileView: View {
         } label: {
             HStack(spacing: 6) {
                 ShortcutIcon(shortcut: shortcut)
-                    .frame(width: 13, height: 13)
+                    .frame(width: 15, height: 15)
                 Text(shortcut.label)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.primary)

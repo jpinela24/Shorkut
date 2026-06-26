@@ -18,15 +18,18 @@ final class DesktopIconGrid {
     static var cellHeight: CGFloat = 64 + 41
     private static var hasStartedRefresh = false
 
-    /// Safe to call more than once — only the first call does any work.
-    static func refreshFromFinderIfNeeded() {
-        guard !hasStartedRefresh else { return }
+    /// Safe to call more than once — only the first call does any work, unless
+    /// `force` is set (used by the manual "Match Finder" button in Settings).
+    /// `onUpdate` fires on the main thread only if the query actually succeeds.
+    static func refreshFromFinderIfNeeded(force: Bool = false, onUpdate: ((CGFloat, CGFloat) -> Void)? = nil) {
+        guard force || !hasStartedRefresh else { return }
         hasStartedRefresh = true
         DispatchQueue.global(qos: .utility).async {
             guard let iconSize = queryIconSize() else { return }
             DispatchQueue.main.async {
                 cellWidth = iconSize + 34
                 cellHeight = iconSize + 41
+                onUpdate?(cellWidth, cellHeight)
             }
         }
     }

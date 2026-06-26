@@ -192,6 +192,13 @@ final class ShortcutStore: ObservableObject {
     @Published var tileWidthScale: Int = 1
     @Published var autoResizeTile: Bool = true
     @Published var tiles: [TileConfig] = [TileConfig(id: DesktopTileWindow.primaryTileId, name: "Tile 1", sectionIds: nil)]
+    /// User-adjustable snap-grid cell size for dragging tiles, since Finder's
+    /// per-user "grid spacing" setting isn't exposed by any public API — only
+    /// icon size is. Defaults to whatever DesktopIconGrid derived from icon
+    /// size, but the user can nudge it in Settings > Tiles until it actually
+    /// lines up with their desktop.
+    @Published var gridCellWidth: CGFloat = DesktopIconGrid.cellWidth
+    @Published var gridCellHeight: CGFloat = DesktopIconGrid.cellHeight
 
     private static let sectionsDefaultsKey = "ShorkutSections"
     private static let shortcutsDefaultsKey = "ShorkutScriptShortcuts"
@@ -201,6 +208,8 @@ final class ShortcutStore: ObservableObject {
     private static let tileWidthScaleDefaultsKey = "ShorkutTileWidthScale"
     private static let autoResizeTileDefaultsKey = "ShorkutAutoResizeTile"
     private static let tilesDefaultsKey = "ShorkutTiles"
+    private static let gridCellWidthDefaultsKey = "ShorkutGridCellWidth"
+    private static let gridCellHeightDefaultsKey = "ShorkutGridCellHeight"
     /// Legacy key from before per-tile config existed — just a flat list of tile
     /// ids with no per-tile settings. Migrated into `tiles` on first load.
     private static let legacyTileIdsDefaultsKey = "ShorkutTileIds"
@@ -230,6 +239,14 @@ final class ShortcutStore: ObservableObject {
         if UserDefaults.standard.object(forKey: ShortcutStore.autoResizeTileDefaultsKey) != nil {
             autoResizeTile = UserDefaults.standard.bool(forKey: ShortcutStore.autoResizeTileDefaultsKey)
         }
+        let savedGridWidth = UserDefaults.standard.double(forKey: ShortcutStore.gridCellWidthDefaultsKey)
+        if savedGridWidth > 0 {
+            gridCellWidth = CGFloat(savedGridWidth)
+        }
+        let savedGridHeight = UserDefaults.standard.double(forKey: ShortcutStore.gridCellHeightDefaultsKey)
+        if savedGridHeight > 0 {
+            gridCellHeight = CGFloat(savedGridHeight)
+        }
         load()
     }
 
@@ -246,6 +263,27 @@ final class ShortcutStore: ObservableObject {
     func setAutoResizeTile(_ enabled: Bool) {
         autoResizeTile = enabled
         UserDefaults.standard.set(enabled, forKey: ShortcutStore.autoResizeTileDefaultsKey)
+    }
+
+    func setGridCellWidth(_ width: CGFloat) {
+        gridCellWidth = width
+        UserDefaults.standard.set(Double(width), forKey: ShortcutStore.gridCellWidthDefaultsKey)
+    }
+
+    func setGridCellHeight(_ height: CGFloat) {
+        gridCellHeight = height
+        UserDefaults.standard.set(Double(height), forKey: ShortcutStore.gridCellHeightDefaultsKey)
+    }
+
+    /// Re-detects Finder's icon size and resets the grid to the size derived
+    /// from it, undoing any manual adjustment. Finder's "grid spacing" slider
+    /// itself isn't exposed by any API, so this is a starting point, not a
+    /// guaranteed exact match — that's why manual width/height sliders exist too.
+    func matchFinderGrid() {
+        DesktopIconGrid.refreshFromFinderIfNeeded(force: true) { [weak self] width, height in
+            self?.setGridCellWidth(width)
+            self?.setGridCellHeight(height)
+        }
     }
 
     func setPreferredBrowser(_ app: BrowserApp?) {
