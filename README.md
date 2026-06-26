@@ -17,7 +17,7 @@ A native macOS menu-bar app and desktop widget for one-click shortcuts — scrip
   - **Apps** — launch any installed app with one click.
   - **Webpages** — open a URL in your default or a specific browser.
 - **Drag-and-drop everything** — drop a `.sh` script, an `.app`, or a `.shorkut` file straight onto the tile or Settings to add it. Drag shortcuts and whole sections to reorder them.
-- **Customize** — pick a custom icon and color per shortcut, assign a global hotkey, rename anything.
+- **Customize** — pick a custom icon and color per shortcut, rename anything.
 - **Export/import** — share shortcuts with friends as portable `.shorkut` files.
 - **Template generator** — quickly build common shortcuts (SSH, curl, Docker, restart a service) from a form instead of writing a script by hand.
 - **Launch at login**, run notifications, and other small conveniences that make it feel like a normal Mac app.
@@ -47,7 +47,12 @@ cd Shorkut
 ## Notes
 
 - The app is ad-hoc signed (not notarized), so a fresh install on another Mac will need a right-click → Open the first time, or an approval in System Settings → Privacy & Security.
-- Global hotkeys require granting Input Monitoring permission for true system-wide dispatch.
+
+## Security model
+
+- `.shorkut` files can bundle script source, app references, and webpage URLs — anything someone exports can be re-imported and run.
+- Imported and template-generated scripts run with your full user permissions the moment you confirm them; Shorkut shows a one-time trust prompt before a newly-imported script's first run, but does not sandbox or sanitize script *contents* beyond verifying it's plain text.
+- Only import `.shorkut` files, scripts, or apps from people and sources you trust — there's no way for Shorkut to verify what a script actually does before running it.
 
 ## Author
 

@@ -19,15 +19,15 @@ FRAMEWORKS="-framework SwiftUI -framework AppKit -framework ServiceManagement -f
 
 if [ "$1" = "--universal" ]; then
     echo "Compiling (arm64)..."
-    swiftc -target arm64-apple-macosx13.0 Sources/Shorkut/*.swift -O -o "build/${APP_NAME}-arm64" $FRAMEWORKS
+    swiftc -target arm64-apple-macosx13.0 Sources/Shorkut/*.swift Sources/ShorkutCore/*.swift -O -o "build/${APP_NAME}-arm64" $FRAMEWORKS
     echo "Compiling (x86_64)..."
-    swiftc -target x86_64-apple-macosx13.0 Sources/Shorkut/*.swift -O -o "build/${APP_NAME}-x86_64" $FRAMEWORKS
+    swiftc -target x86_64-apple-macosx13.0 Sources/Shorkut/*.swift Sources/ShorkutCore/*.swift -O -o "build/${APP_NAME}-x86_64" $FRAMEWORKS
     echo "Combining into universal binary..."
     lipo -create "build/${APP_NAME}-arm64" "build/${APP_NAME}-x86_64" -output "$APP/Contents/MacOS/$APP_NAME"
     rm -f "build/${APP_NAME}-arm64" "build/${APP_NAME}-x86_64"
 else
     echo "Compiling (native arch only — use ./build.sh --universal for distribution)..."
-    swiftc Sources/Shorkut/*.swift -O -o "$APP/Contents/MacOS/$APP_NAME" $FRAMEWORKS
+    swiftc Sources/Shorkut/*.swift Sources/ShorkutCore/*.swift -O -o "$APP/Contents/MacOS/$APP_NAME" $FRAMEWORKS
 fi
 
 echo "Generating app icon..."

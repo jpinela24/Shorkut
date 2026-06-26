@@ -1,6 +1,13 @@
 import Foundation
 import AppKit
 import UniformTypeIdentifiers
+// build.sh compiles Sources/Shorkut and Sources/ShorkutCore together into one
+// flat binary (no module boundary), so Sanitization is already in scope there.
+// Under `swift build`/`swift test`, ShorkutCore is its own SPM module and
+// needs an explicit import — canImport keeps both paths compiling.
+#if canImport(ShorkutCore)
+import ShorkutCore
+#endif
 
 extension UTType {
     static var shorkut: UTType {
@@ -518,11 +525,28 @@ final class ShortcutStore: ObservableObject {
             targetSection = sections[0].id
         }
 
-        let destURL = ShortcutStore.scriptsDirectory.appendingPathComponent(sourceURL.lastPathComponent)
+        let originalBaseName = sourceURL.deletingPathExtension().lastPathComponent
+        let safeBaseName = Sanitization.safeFilenameBase(from: originalBaseName)
+        let ext = sourceURL.pathExtension.isEmpty ? "sh" : sourceURL.pathExtension
+        let destFilename = "\(safeBaseName).\(ext)"
+        let destURL = ShortcutStore.scriptsDirectory.appendingPathComponent(destFilename).standardizedFileURL
+        guard destURL.path.hasPrefix(ShortcutStore.scriptsDirectory.standardizedFileURL.path + "/") else {
+            ShortcutStore.showAlert(title: "Couldn't import script", message: "That filename isn't valid.")
+            return
+        }
+
+        if let fileSize = (try? FileManager.default.attributesOfItem(atPath: sourceURL.path)[.size] as? Int), fileSize > Sanitization.maxScriptContentSize {
+            ShortcutStore.showAlert(
+                title: "Script too large",
+                message: "“\(sourceURL.lastPathComponent)” is larger than \(Sanitization.maxScriptContentSize / 1024 / 1024) MB, which is larger than any real shortcut script should be."
+            )
+            return
+        }
+
         if FileManager.default.fileExists(atPath: destURL.path) {
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "“\(sourceURL.lastPathComponent)” already exists"
+            alert.messageText = "“\(destFilename)” already exists"
             alert.informativeText = "A script with this name is already managed by Shorkut" +
                 (shortcuts.contains(where: { $0.scriptPath == destURL.path }) ? " by an existing shortcut." : ".") +
                 " Replacing it will overwrite its contents."
@@ -618,12 +642,11 @@ final class ShortcutStore: ObservableObject {
 
         guard let (label, urlString) = ShortcutStore.promptForWebpage() else { return }
 
-        var normalized = urlString
-        if !normalized.lowercased().hasPrefix("http://") && !normalized.lowercased().hasPrefix("https://") {
-            normalized = "https://" + normalized
-        }
-        guard URL(string: normalized) != nil else {
-            ShortcutStore.showAlert(title: "Invalid URL", message: "“\(urlString)” doesn't look like a valid web address.")
+        guard let normalized = Sanitization.normalizedWebpageURL(urlString) else {
+            ShortcutStore.showAlert(
+                title: "Invalid URL",
+                message: "“\(urlString)” doesn't look like a valid http:// or https:// web address."
+            )
             return
         }
 
@@ -749,9 +772,18 @@ final class ShortcutStore: ObservableObject {
 
     @discardableResult
     func addGeneratedShortcut(label: String, scriptContent: String, sectionId: UUID?) -> Bool {
+        guard scriptContent.utf8.count <= Sanitization.maxScriptContentSize else {
+            ShortcutStore.showAlert(
+                title: "Script too large",
+                message: "The generated script is larger than \(Sanitization.maxScriptContentSize / 1024 / 1024) MB."
+            )
+            return false
+        }
         let targetSection = sectionId ?? ensureDefaultSection()
-        let safeName = label.isEmpty ? "Shortcut" : label
-        let destURL = ShortcutStore.scriptsDirectory.appendingPathComponent("\(safeName)-\(UUID().uuidString.prefix(6)).sh")
+        guard let destURL = Sanitization.scriptDestinationURL(forLabel: label, in: ShortcutStore.scriptsDirectory) else {
+            ShortcutStore.showAlert(title: "Couldn't create shortcut", message: "That name produced an invalid file path.")
+            return false
+        }
         do {
             try scriptContent.write(to: destURL, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destURL.path)
@@ -852,6 +884,15 @@ final class ShortcutStore: ObservableObject {
     }
 
     func importShortcuts(from url: URL) {
+        if let fileSize = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int,
+           fileSize > Sanitization.maxImportFileSize {
+            ShortcutStore.showAlert(
+                title: "File too large",
+                message: "“\(url.lastPathComponent)” is larger than \(Sanitization.maxImportFileSize / 1024 / 1024) MB, which is larger than a Shorkut backup should be."
+            )
+            return
+        }
+
         guard let data = try? Data(contentsOf: url),
               let export = try? JSONDecoder().decode(ShorkutExport.self, from: data) else {
             ShortcutStore.showAlert(title: "Couldn't import", message: "“\(url.lastPathComponent)” isn't a valid Shorkut file.")
@@ -859,6 +900,8 @@ final class ShortcutStore: ObservableObject {
         }
 
         var skipped: [String] = []
+        var imported = 0
+        var importedScripts = 0
 
         for item in export.items {
             let sectionId: UUID
@@ -873,7 +916,11 @@ final class ShortcutStore: ObservableObject {
             switch item.kind {
             case .script:
                 guard let content = item.scriptContent else { skipped.append(item.label); continue }
-                let destURL = ShortcutStore.scriptsDirectory.appendingPathComponent("\(item.label)-\(UUID().uuidString.prefix(6)).sh")
+                guard content.utf8.count <= Sanitization.maxScriptContentSize else { skipped.append(item.label); continue }
+                guard let destURL = Sanitization.scriptDestinationURL(forLabel: item.label, in: ShortcutStore.scriptsDirectory) else {
+                    skipped.append(item.label)
+                    continue
+                }
                 do {
                     try content.write(to: destURL, atomically: true, encoding: .utf8)
                     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destURL.path)
@@ -882,6 +929,8 @@ final class ShortcutStore: ObservableObject {
                     continue
                 }
                 shortcuts.append(ScriptShortcut(label: item.label, scriptPath: destURL.path, sectionId: sectionId, kind: .script, needsTrustConfirmation: true))
+                imported += 1
+                importedScripts += 1
             case .app:
                 guard let bundleId = item.bundleIdentifier,
                       let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else {
@@ -889,21 +938,30 @@ final class ShortcutStore: ObservableObject {
                     continue
                 }
                 shortcuts.append(ScriptShortcut(label: item.label, scriptPath: appURL.path, sectionId: sectionId, kind: .app))
+                imported += 1
             case .webpage:
-                guard let urlString = item.scriptContent else { skipped.append(item.label); continue }
-                shortcuts.append(ScriptShortcut(label: item.label, scriptPath: urlString, sectionId: sectionId, kind: .webpage))
+                guard let rawURL = item.scriptContent, let normalized = Sanitization.normalizedWebpageURL(rawURL) else {
+                    skipped.append(item.label)
+                    continue
+                }
+                shortcuts.append(ScriptShortcut(label: item.label, scriptPath: normalized, sectionId: sectionId, kind: .webpage))
+                imported += 1
             }
         }
 
         save()
 
-        if !skipped.isEmpty {
-            ShortcutStore.showAlert(
-                title: "Some shortcuts were skipped",
-                message: "Couldn't import: \(skipped.joined(separator: ", ")). " +
-                    "For apps, the app may not be installed on this Mac."
-            )
+        var summary = imported == 1 ? "Imported 1 shortcut." : "Imported \(imported) shortcuts."
+        if importedScripts > 0 {
+            summary += " Scripts require confirmation before they first run."
         }
+        if !skipped.isEmpty {
+            summary += "\n\nCouldn't import: \(skipped.joined(separator: ", ")). For apps, the app may not be installed on this Mac."
+        }
+        ShortcutStore.showAlert(
+            title: skipped.isEmpty ? "Import complete" : "Some shortcuts were skipped",
+            message: summary
+        )
     }
 
     func run(_ shortcut: ScriptShortcut) {

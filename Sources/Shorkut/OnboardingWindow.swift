@@ -55,7 +55,7 @@ private let onboardingPages = [
     OnboardingPage(
         symbol: "square.grid.2x2.fill",
         title: "Organize your way",
-        body: "Group shortcuts into sections, drag to reorder them, give each one a custom icon and color, even assign a hotkey."
+        body: "Group shortcuts into sections, drag to reorder them, and give each one a custom icon and color."
     ),
     OnboardingPage(
         symbol: "checkmark.circle.fill",
