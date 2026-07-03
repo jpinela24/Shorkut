@@ -268,9 +268,6 @@ struct ShortcutsTab: View {
                                         Image(systemName: "line.3.horizontal")
                                             .foregroundStyle(.tertiary)
                                             .help("Drag to reorder")
-                                            .onDrag {
-                                                shorkutDragProvider(shortcut.id.uuidString)
-                                            }
                                         ShortcutIcon(shortcut: shortcut)
                                             .frame(width: 18, height: 18)
                                         Button(shortcut.label) {
@@ -313,6 +310,9 @@ struct ShortcutsTab: View {
                                     .padding(.vertical, 2)
                                     .padding(.horizontal, 4)
                                     .background(Color.primary.opacity(0.001))
+                                    .onDrag {
+                                        shorkutDragProvider(shortcut.id.uuidString)
+                                    }
                                     .onDrop(of: [UTType.shorkutDragPayload], isTargeted: nil) { providers in
                                         loadShorkutDragPayload(from: providers) { raw in
                                             guard let id = UUID(uuidString: raw) else { return }
