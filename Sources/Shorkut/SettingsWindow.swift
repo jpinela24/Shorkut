@@ -265,29 +265,33 @@ struct ShortcutsTab: View {
                             } else {
                                 ForEach(visibleShortcuts) { shortcut in
                                     HStack {
-                                        VStack(spacing: 0) {
+                                        VStack(spacing: 1) {
                                             Button {
                                                 store.nudgeShortcut(shortcut, direction: -1)
                                             } label: {
                                                 Image(systemName: "chevron.up")
-                                                    .font(.system(size: 9, weight: .semibold))
+                                                    .font(.system(size: 11, weight: .bold))
+                                                    .frame(width: 20, height: 15)
+                                                    .contentShape(Rectangle())
                                             }
                                             .buttonStyle(.plain)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundStyle(store.isFirstInSection(shortcut) ? Color.secondary.opacity(0.25) : Color.accentColor)
                                             .disabled(store.isFirstInSection(shortcut))
                                             .help("Move up")
                                             Button {
                                                 store.nudgeShortcut(shortcut, direction: 1)
                                             } label: {
                                                 Image(systemName: "chevron.down")
-                                                    .font(.system(size: 9, weight: .semibold))
+                                                    .font(.system(size: 11, weight: .bold))
+                                                    .frame(width: 20, height: 15)
+                                                    .contentShape(Rectangle())
                                             }
                                             .buttonStyle(.plain)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundStyle(store.isLastInSection(shortcut) ? Color.secondary.opacity(0.25) : Color.accentColor)
                                             .disabled(store.isLastInSection(shortcut))
                                             .help("Move down")
                                         }
-                                        .frame(width: 14)
+                                        .frame(width: 20)
                                         ShortcutIcon(shortcut: shortcut)
                                             .frame(width: 18, height: 18)
                                         Button(shortcut.label) {
