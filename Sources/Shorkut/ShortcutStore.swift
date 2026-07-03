@@ -774,6 +774,31 @@ final class ShortcutStore: ObservableObject {
         save()
     }
 
+    /// Ordered positions (in the flat `shortcuts` array) of every shortcut that
+    /// shares `shortcut`'s section — i.e. its visual siblings in that group.
+    private func siblingIndices(of shortcut: ScriptShortcut) -> [Int] {
+        shortcuts.indices.filter { shortcuts[$0].sectionId == shortcut.sectionId }
+    }
+
+    func isFirstInSection(_ shortcut: ScriptShortcut) -> Bool {
+        siblingIndices(of: shortcut).first.map { shortcuts[$0].id == shortcut.id } ?? true
+    }
+
+    func isLastInSection(_ shortcut: ScriptShortcut) -> Bool {
+        siblingIndices(of: shortcut).last.map { shortcuts[$0].id == shortcut.id } ?? true
+    }
+
+    /// Swaps `shortcut` with its previous/next sibling in the same section.
+    /// `direction` is -1 for up, +1 for down. Other sections are untouched.
+    func nudgeShortcut(_ shortcut: ScriptShortcut, direction: Int) {
+        let siblings = siblingIndices(of: shortcut)
+        guard let pos = siblings.firstIndex(where: { shortcuts[$0].id == shortcut.id }) else { return }
+        let targetPos = pos + direction
+        guard targetPos >= 0, targetPos < siblings.count else { return }
+        shortcuts.swapAt(siblings[pos], siblings[targetPos])
+        save()
+    }
+
     /// Moves a shortcut into `sectionId`, optionally inserting it immediately before
     /// `beforeId` so drag-and-drop can reorder within a section as well as across sections.
     func moveShortcut(id: UUID, toSection sectionId: UUID, beforeId: UUID? = nil) {

@@ -265,9 +265,29 @@ struct ShortcutsTab: View {
                             } else {
                                 ForEach(visibleShortcuts) { shortcut in
                                     HStack {
-                                        Image(systemName: "line.3.horizontal")
-                                            .foregroundStyle(.tertiary)
-                                            .help("Drag to reorder")
+                                        VStack(spacing: 0) {
+                                            Button {
+                                                store.nudgeShortcut(shortcut, direction: -1)
+                                            } label: {
+                                                Image(systemName: "chevron.up")
+                                                    .font(.system(size: 9, weight: .semibold))
+                                            }
+                                            .buttonStyle(.plain)
+                                            .foregroundStyle(.secondary)
+                                            .disabled(store.isFirstInSection(shortcut))
+                                            .help("Move up")
+                                            Button {
+                                                store.nudgeShortcut(shortcut, direction: 1)
+                                            } label: {
+                                                Image(systemName: "chevron.down")
+                                                    .font(.system(size: 9, weight: .semibold))
+                                            }
+                                            .buttonStyle(.plain)
+                                            .foregroundStyle(.secondary)
+                                            .disabled(store.isLastInSection(shortcut))
+                                            .help("Move down")
+                                        }
+                                        .frame(width: 14)
                                         ShortcutIcon(shortcut: shortcut)
                                             .frame(width: 18, height: 18)
                                         Button(shortcut.label) {
