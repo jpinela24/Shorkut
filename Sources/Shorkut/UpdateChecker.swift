@@ -1,5 +1,8 @@
 import Foundation
 import AppKit
+#if canImport(ShorkutCore)
+import ShorkutCore
+#endif
 
 /// Checks GitHub Releases for a newer tagged version than the one currently
 /// running. Shorkut isn't notarized/auto-updating, so this just points the
@@ -29,7 +32,9 @@ final class UpdateChecker: ObservableObject {
     func checkForUpdatesIfDue() {
         let last = UserDefaults.standard.double(forKey: Self.lastAutoCheckDefaultsKey)
         guard Date().timeIntervalSince1970 - last >= Self.autoCheckInterval else { return }
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastAutoCheckDefaultsKey)
+        // NB: the timestamp is recorded *after* the request completes (see below),
+        // not here — otherwise a failed check still counts as "checked today" and
+        // suppresses retries for 24h.
         checkForUpdates(silent: true)
     }
 
@@ -42,27 +47,40 @@ final class UpdateChecker: ObservableObject {
         var request = URLRequest(url: Self.releasesAPIURL)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
 
-        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
-                self?.isChecking = false
-                guard let data, error == nil,
+                guard let self else { return }
+                self.isChecking = false
+
+                // A completed request (success or definitive failure) updates the
+                // auto-check throttle timestamp; a transport error leaves it so the
+                // next launch can retry sooner.
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                let transportOK = error == nil && UpdateCheck.isSuccessful(status: status)
+                if transportOK {
+                    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastAutoCheckDefaultsKey)
+                }
+
+                guard transportOK,
+                      let data,
                       let release = try? JSONDecoder().decode(Release.self, from: data) else {
                     if !silent {
                         let alert = NSAlert()
                         alert.alertStyle = .warning
                         alert.messageText = "Couldn't check for updates"
-                        alert.informativeText = "Couldn't reach GitHub. Check your internet connection and try again."
+                        alert.informativeText = error == nil
+                            ? "GitHub returned an unexpected response (HTTP \(status)). Try again later."
+                            : "Couldn't reach GitHub. Check your internet connection and try again."
                         alert.addButton(withTitle: "OK")
                         alert.runModal()
                     }
                     return
                 }
 
-                let latestVersion = release.tag_name.trimmingCharacters(in: CharacterSet(charactersIn: "v"))
-                let current = self?.currentVersion ?? "1.0.0"
-
-                if Self.isNewer(latestVersion, than: current) {
-                    self?.promptToUpdate(to: latestVersion, url: release.html_url)
+                let current = self.currentVersion
+                if UpdateCheck.isNewer(release.tag_name, than: current) {
+                    self.promptToUpdate(to: SemVer.parse(release.tag_name).map { "\($0.major).\($0.minor).\($0.patch)" } ?? release.tag_name,
+                                        url: release.html_url)
                 } else if !silent {
                     let alert = NSAlert()
                     alert.messageText = "You're up to date"
@@ -75,25 +93,16 @@ final class UpdateChecker: ObservableObject {
     }
 
     private func promptToUpdate(to version: String, url: String) {
+        // Only ever hand an HTTPS github.com URL to the browser; a tampered
+        // html_url falls back to the known-good releases page.
+        let destination = UpdateCheck.approvedReleaseURL(url) ?? Self.releasesPageURL
+
         let alert = NSAlert()
         alert.messageText = "Shorkut \(version) is available"
         alert.informativeText = "You're running \(currentVersion). Download the new version from GitHub?"
         alert.addButton(withTitle: "View Release")
         alert.addButton(withTitle: "Later")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        NSWorkspace.shared.open(URL(string: url) ?? Self.releasesPageURL)
-    }
-
-    /// Compares dotted version strings numerically (e.g. "1.10.0" > "1.9.0"),
-    /// padding missing components with 0 so "1.1" vs "1.1.0" compares equal.
-    private static func isNewer(_ candidate: String, than current: String) -> Bool {
-        let a = candidate.split(separator: ".").compactMap { Int($0) }
-        let b = current.split(separator: ".").compactMap { Int($0) }
-        for i in 0..<max(a.count, b.count) {
-            let x = i < a.count ? a[i] : 0
-            let y = i < b.count ? b[i] : 0
-            if x != y { return x > y }
-        }
-        return false
+        NSWorkspace.shared.open(destination)
     }
 }
