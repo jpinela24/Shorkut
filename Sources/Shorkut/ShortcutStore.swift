@@ -613,11 +613,12 @@ final class ShortcutStore: ObservableObject {
             return
         }
 
-        if let fileSize = (try? FileManager.default.attributesOfItem(atPath: sourceURL.path)[.size] as? Int), fileSize > Sanitization.maxScriptContentSize {
-            ShortcutStore.showAlert(
-                title: "Script too large",
-                message: "“\(sourceURL.lastPathComponent)” is larger than \(Sanitization.maxScriptContentSize / 1024 / 1024) MB, which is larger than any real shortcut script should be."
-            )
+        // Fail-closed pre-check on the main thread: unreadable metadata, a
+        // non-regular file (folder/symlink/device), or an over-limit file is
+        // rejected before we touch anything. The byte limit is re-enforced
+        // during the streamed copy below in case the file changes underneath us.
+        if case let .failure(error) = SafeFileImport.validateRegularFile(at: sourceURL.path, maxBytes: Sanitization.maxScriptContentSize) {
+            ShortcutStore.showAlert(title: "Couldn't import script", message: error.message(filename: sourceURL.lastPathComponent))
             return
         }
 
@@ -634,27 +635,35 @@ final class ShortcutStore: ObservableObject {
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
 
-        do {
-            if FileManager.default.fileExists(atPath: destURL.path) {
-                try FileManager.default.removeItem(at: destURL)
-            }
-            try FileManager.default.copyItem(at: sourceURL, to: destURL)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destURL.path)
-        } catch {
-            ShortcutStore.showAlert(title: "Couldn't import script", message: error.localizedDescription)
-            return
-        }
-
-        if let issue = ShortcutStore.plainTextIssue(at: destURL) {
-            try? FileManager.default.removeItem(at: destURL)
-            ShortcutStore.showAlert(title: "Not a plain-text script", message: issue)
-            return
-        }
-
         let label = sourceURL.deletingPathExtension().lastPathComponent
-        let shortcut = ScriptShortcut(label: label, scriptPath: destURL.path, sectionId: targetSection)
-        shortcuts.append(shortcut)
-        save()
+        let filename = sourceURL.lastPathComponent
+
+        // Copy off the main thread; mutate published state back on main.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let copyResult = SafeFileImport.streamCopy(from: sourceURL, to: destURL, maxBytes: Sanitization.maxScriptContentSize)
+            if case let .failure(error) = copyResult {
+                DispatchQueue.main.async {
+                    ShortcutStore.showAlert(title: "Couldn't import script", message: error.message(filename: filename))
+                }
+                return
+            }
+
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destURL.path)
+
+            if let issue = ShortcutStore.plainTextIssue(at: destURL) {
+                try? FileManager.default.removeItem(at: destURL)
+                DispatchQueue.main.async {
+                    ShortcutStore.showAlert(title: "Not a plain-text script", message: issue)
+                }
+                return
+            }
+
+            DispatchQueue.main.async {
+                let shortcut = ScriptShortcut(label: label, scriptPath: destURL.path, sectionId: targetSection)
+                self.shortcuts.append(shortcut)
+                self.save()
+            }
+        }
     }
 
     func promptToAddApp(to sectionId: UUID? = nil) {
@@ -1000,17 +1009,20 @@ final class ShortcutStore: ObservableObject {
     }
 
     func importShortcuts(from url: URL) {
-        if let fileSize = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int,
-           fileSize > Sanitization.maxImportFileSize {
-            ShortcutStore.showAlert(
-                title: "File too large",
-                message: "“\(url.lastPathComponent)” is larger than \(Sanitization.maxImportFileSize / 1024 / 1024) MB, which is larger than a Shorkut backup should be."
-            )
+        // Fail-closed read: rejects unreadable metadata, non-regular files, and
+        // anything over the limit *during* the read (never loads an unbounded
+        // file into memory).
+        let readResult = SafeFileImport.boundedRead(at: url, maxBytes: Sanitization.maxImportFileSize)
+        let data: Data
+        switch readResult {
+        case .success(let d):
+            data = d
+        case .failure(let error):
+            ShortcutStore.showAlert(title: "Couldn't import", message: error.message(filename: url.lastPathComponent))
             return
         }
 
-        guard let data = try? Data(contentsOf: url),
-              let export = try? JSONDecoder().decode(ShorkutExport.self, from: data) else {
+        guard let export = try? JSONDecoder().decode(ShorkutExport.self, from: data) else {
             ShortcutStore.showAlert(title: "Couldn't import", message: "“\(url.lastPathComponent)” isn't a valid Shorkut file.")
             return
         }
