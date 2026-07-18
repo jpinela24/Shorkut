@@ -114,7 +114,23 @@ struct ShorkutExport: Codable {
         var bundleIdentifier: String?   // for .app
     }
 
-    var version: Int = 1
+    var version: Int = ImportValidation.supportedVersion
+    var items: [Item]
+}
+
+/// Decode-side view of a `.shorkut` file used for *import*. Deliberately looser
+/// than `ShorkutExport`: `version` is optional so a missing field is detected
+/// (not silently defaulted), and `kind` is a raw String so an unknown kind
+/// becomes a per-item skip rather than failing the whole decode.
+private struct ShorkutImportFile: Decodable {
+    struct Item: Decodable {
+        var label: String
+        var kind: String
+        var sectionName: String
+        var scriptContent: String?
+        var bundleIdentifier: String?
+    }
+    var version: Int?
     var items: [Item]
 }
 
@@ -1022,30 +1038,86 @@ final class ShortcutStore: ObservableObject {
             return
         }
 
-        guard let export = try? JSONDecoder().decode(ShorkutExport.self, from: data) else {
+        guard let file = try? JSONDecoder().decode(ShorkutImportFile.self, from: data) else {
             ShortcutStore.showAlert(title: "Couldn't import", message: "“\(url.lastPathComponent)” isn't a valid Shorkut file.")
             return
         }
 
+        // Schema gate — reject the whole file up front (before any mutation) if
+        // the version is missing/unsupported or there are too many items.
+        if let schemaError = ImportValidation.validateSchema(version: file.version, itemCount: file.items.count) {
+            ShortcutStore.showAlert(title: "Couldn't import", message: schemaError.message)
+            return
+        }
+
+        // Phase 1 — validate & stage everything. No persisted state is touched
+        // here: sections aren't created and scripts aren't written until every
+        // item has been fully validated.
+        struct Staged {
+            let normalized: ImportValidation.NormalizedItem
+            let resolvedAppPath: String?   // for .app, the installed app's path
+        }
+        var staged: [Staged] = []
         var skipped: [String] = []
+        var seenKeys = Set<String>()
+
+        for raw in file.items {
+            let rawItem = ImportValidation.RawItem(
+                label: raw.label, kind: raw.kind, sectionName: raw.sectionName,
+                scriptContent: raw.scriptContent, bundleIdentifier: raw.bundleIdentifier
+            )
+            guard case let .success(normalized) = ImportValidation.validateItem(rawItem) else {
+                skipped.append(raw.label.isEmpty ? "(unnamed)" : raw.label)
+                continue
+            }
+
+            // In-file duplicates collapse to the first occurrence.
+            guard seenKeys.insert(ImportValidation.duplicateKey(normalized)).inserted else {
+                skipped.append(normalized.label)
+                continue
+            }
+
+            // Environment-dependent check: an app must actually be installed here.
+            var resolvedAppPath: String? = nil
+            if normalized.kind == "app" {
+                guard let bundle = normalized.bundleIdentifier,
+                      let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) else {
+                    skipped.append(normalized.label)
+                    continue
+                }
+                resolvedAppPath = appURL.path
+            }
+
+            staged.append(Staged(normalized: normalized, resolvedAppPath: resolvedAppPath))
+        }
+
+        // Phase 2 — commit. Sections are created on demand and reused within
+        // this batch; scripts are written last.
+        var sectionIdByName: [String: UUID] = [:]
+        func sectionId(for name: String) -> UUID {
+            let key = name.isEmpty ? "General" : name
+            if let cached = sectionIdByName[key] { return cached }
+            if let existing = sections.first(where: { $0.name == key }) {
+                sectionIdByName[key] = existing.id
+                return existing.id
+            }
+            let newSection = Section(name: key)
+            sections.append(newSection)
+            sectionIdByName[key] = newSection.id
+            return newSection.id
+        }
+
         var imported = 0
         var importedScripts = 0
 
-        for item in export.items {
-            let sectionId: UUID
-            if let existing = sections.first(where: { $0.name == item.sectionName }) {
-                sectionId = existing.id
-            } else {
-                let newSection = Section(name: item.sectionName)
-                sections.append(newSection)
-                sectionId = newSection.id
-            }
+        for entry in staged {
+            let item = entry.normalized
+            let section = sectionId(for: item.sectionName)
 
             switch item.kind {
-            case .script:
-                guard let content = item.scriptContent else { skipped.append(item.label); continue }
-                guard content.utf8.count <= Sanitization.maxScriptContentSize else { skipped.append(item.label); continue }
-                guard let destURL = Sanitization.scriptDestinationURL(forLabel: item.label, in: ShortcutStore.scriptsDirectory) else {
+            case "script":
+                guard let content = item.scriptContent,
+                      let destURL = Sanitization.scriptDestinationURL(forLabel: item.label, in: ShortcutStore.scriptsDirectory) else {
                     skipped.append(item.label)
                     continue
                 }
@@ -1056,24 +1128,17 @@ final class ShortcutStore: ObservableObject {
                     skipped.append(item.label)
                     continue
                 }
-                shortcuts.append(ScriptShortcut(label: item.label, scriptPath: destURL.path, sectionId: sectionId, kind: .script, needsTrustConfirmation: true))
+                shortcuts.append(ScriptShortcut(label: item.label, scriptPath: destURL.path, sectionId: section, kind: .script, needsTrustConfirmation: true))
                 imported += 1
                 importedScripts += 1
-            case .app:
-                guard let bundleId = item.bundleIdentifier,
-                      let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else {
-                    skipped.append(item.label)
-                    continue
-                }
-                shortcuts.append(ScriptShortcut(label: item.label, scriptPath: appURL.path, sectionId: sectionId, kind: .app))
+            case "app":
+                shortcuts.append(ScriptShortcut(label: item.label, scriptPath: entry.resolvedAppPath ?? "", sectionId: section, kind: .app))
                 imported += 1
-            case .webpage:
-                guard let rawURL = item.scriptContent, let normalized = Sanitization.normalizedWebpageURL(rawURL) else {
-                    skipped.append(item.label)
-                    continue
-                }
-                shortcuts.append(ScriptShortcut(label: item.label, scriptPath: normalized, sectionId: sectionId, kind: .webpage))
+            case "webpage":
+                shortcuts.append(ScriptShortcut(label: item.label, scriptPath: item.url ?? "", sectionId: section, kind: .webpage))
                 imported += 1
+            default:
+                skipped.append(item.label)
             }
         }
 
@@ -1084,7 +1149,8 @@ final class ShortcutStore: ObservableObject {
             summary += " Scripts require confirmation before they first run."
         }
         if !skipped.isEmpty {
-            summary += "\n\nCouldn't import: \(skipped.joined(separator: ", ")). For apps, the app may not be installed on this Mac."
+            let names = ImportValidation.skippedSummary(skipped)
+            summary += "\n\nSkipped \(skipped.count): \(names). Items can be skipped for a missing/uninstalled app, an invalid URL, a duplicate, or a value that's too long."
         }
         ShortcutStore.showAlert(
             title: skipped.isEmpty ? "Import complete" : "Some shortcuts were skipped",
