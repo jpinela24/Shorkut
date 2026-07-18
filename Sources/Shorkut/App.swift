@@ -1,6 +1,10 @@
 import SwiftUI
 import AppKit
 import Combine
+// Flat build.sh compile has no module boundary; SPM (swift test) needs the import.
+#if canImport(ShorkutCore)
+import ShorkutCore
+#endif
 
 private let menuBarIcon: NSImage = {
     if let path = Bundle.main.path(forResource: "MenuBarIcon", ofType: "png"),
@@ -131,14 +135,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func restartApp() {
-        let appURL = Bundle.main.bundleURL
-        let config = NSWorkspace.OpenConfiguration()
-        config.createsNewApplicationInstance = true
-        config.environment = ["SHORKUT_RESTART": "1"]
-        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, _ in
+    /// `launcher` is injectable so the relaunch handshake can be driven in tests
+    /// without actually spawning a process. It must call its completion with the
+    /// launched app (or nil) and any error — exactly like NSWorkspace.
+    func restartApp(
+        launcher: ((@escaping (NSRunningApplication?, Error?) -> Void) -> Void)? = nil
+    ) {
+        let launch = launcher ?? { completion in
+            let appURL = Bundle.main.bundleURL
+            let config = NSWorkspace.OpenConfiguration()
+            config.createsNewApplicationInstance = true
+            config.environment = ["SHORKUT_RESTART": "1"]
+            NSWorkspace.shared.openApplication(at: appURL, configuration: config, completionHandler: completion)
+        }
+
+        launch { app, error in
             DispatchQueue.main.async {
-                NSApplication.shared.terminate(nil)
+                switch AppRestart.outcome(launchedAppExists: app != nil, error: error) {
+                case .relaunchedTerminateSelf:
+                    NSApplication.shared.terminate(nil)
+                case .failedKeepRunning:
+                    let alert = NSAlert()
+                    alert.alertStyle = .warning
+                    alert.messageText = "Couldn't restart Shorkut"
+                    alert.informativeText = (error?.localizedDescription).map { "\($0)\n\n" } ?? ""
+                    alert.informativeText += "The current Shorkut is still running. Quit and reopen it manually if needed."
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                }
             }
         }
     }
