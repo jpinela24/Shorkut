@@ -118,13 +118,16 @@ struct ShorkutExport: Codable {
     var items: [Item]
 }
 
+/// Only terminals Shorkut can actually *run a script in* are offered. Warp and
+/// Hyper were removed: they expose no reliable "run this command" mechanism, so
+/// selecting them used to silently open a folder instead of running the shortcut.
+/// A user whose saved preference was Warp/Hyper falls back to an installed
+/// terminal on next launch (see ShortcutStore.init).
 enum TerminalApp: String, CaseIterable, Identifiable {
     case terminal = "com.apple.Terminal"
     case iterm = "com.googlecode.iterm2"
-    case warp = "dev.warp.Warp-Stable"
     case alacritty = "org.alacritty"
     case kitty = "net.kovidgoyal.kitty"
-    case hyper = "co.zeit.hyper"
 
     var id: String { rawValue }
 
@@ -132,10 +135,18 @@ enum TerminalApp: String, CaseIterable, Identifiable {
         switch self {
         case .terminal: return "Terminal"
         case .iterm: return "iTerm"
-        case .warp: return "Warp"
         case .alacritty: return "Alacritty"
         case .kitty: return "kitty"
-        case .hyper: return "Hyper"
+        }
+    }
+
+    /// The pure, testable launch target this terminal maps to.
+    var launchTarget: TerminalLaunch.Target {
+        switch self {
+        case .terminal: return .terminal
+        case .iterm: return .iterm
+        case .alacritty: return .alacritty
+        case .kitty: return .kitty
         }
     }
 
@@ -1114,10 +1125,6 @@ final class ShortcutStore: ObservableObject {
         }
 
         let terminal = preferredTerminal.isInstalled ? preferredTerminal : .terminal
-        // Single-quote the path for the shell (safe against $, `, ;, etc.), then escape
-        // the result for embedding inside the AppleScript string literal below.
-        let escapedPath = ShortcutStore.appleScriptEscaped(ShortcutStore.shellQuoted(shortcut.scriptPath))
-        let script: String
 
         // If the terminal app isn't running yet, `activate` launches it, which opens its
         // own default blank window/tab. On that cold-launch path we reuse that existing
@@ -1126,71 +1133,31 @@ final class ShortcutStore: ObservableObject {
         // running, we still add a new tab so we don't hijack whatever the user was doing.
         let wasAlreadyRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: terminal.rawValue).isEmpty
 
-        switch terminal {
-        case .iterm:
-            if wasAlreadyRunning {
-                script = """
-                tell application "iTerm"
-                    activate
-                    if (count of windows) = 0 then
-                        create window with default profile
-                    else
-                        tell current window to create tab with default profile
-                    end if
-                    tell current session of current window
-                        write text "\(escapedPath)"
-                    end tell
-                end tell
-                """
-            } else {
-                script = """
-                tell application "iTerm"
-                    activate
-                    delay 0.6
-                    tell current session of current window
-                        write text "\(escapedPath)"
-                    end tell
-                end tell
-                """
-            }
-        case .terminal:
-            if wasAlreadyRunning {
-                script = """
-                tell application "Terminal"
-                    activate
-                    do script "\(escapedPath)"
-                end tell
-                """
-            } else {
-                script = """
-                tell application "Terminal"
-                    activate
-                    delay 0.6
-                    do script "\(escapedPath)" in front window
-                end tell
-                """
-            }
-        case .warp, .alacritty, .kitty, .hyper:
-            // These don't expose a reliable AppleScript "run command" verb;
-            // just launch the app pointed at the script's folder.
-            guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.rawValue) else {
-                ShortcutStore.showAlert(
-                    title: "\(terminal.displayName) not found",
-                    message: "\(terminal.displayName) is no longer installed. Pick a different terminal in the menu bar."
-                )
-                return
-            }
-            let folderURL = URL(fileURLWithPath: shortcut.scriptPath).deletingLastPathComponent()
-            let config = NSWorkspace.OpenConfiguration()
-            NSWorkspace.shared.open([folderURL], withApplicationAt: appURL, configuration: config, completionHandler: nil)
-            return
-        }
+        // All command/path construction lives in the pure, unit-tested
+        // TerminalLaunch planner — see TerminalLaunchTests for the adversarial
+        // path cases (spaces, quotes, $, backticks, semicolons).
+        let plan = TerminalLaunch.plan(for: terminal.launchTarget, scriptPath: shortcut.scriptPath, alreadyRunning: wasAlreadyRunning)
+        runTerminalPlan(plan, terminal: terminal, shortcutLabel: shortcut.label)
+    }
 
+    /// Executes a `TerminalLaunchPlan`, reporting any launch failure to the user.
+    /// AppleScript plans run via `osascript`; argv plans run `/usr/bin/open` with
+    /// an argument array, so a user-controlled path is never parsed by a shell.
+    private func runTerminalPlan(_ plan: TerminalLaunchPlan, terminal: TerminalApp, shortcutLabel: String) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
         let errorPipe = Pipe()
         process.standardError = errorPipe
+
+        switch plan {
+        case .appleScript(let source):
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", source]
+        case .openArgs(let appName, let args):
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            // -n: new instance (so args reliably reach a fresh terminal even if
+            // one is already running); -a: locate the app by name.
+            process.arguments = ["-n", "-a", appName, "--args"] + args
+        }
 
         do {
             try process.run()
@@ -1200,14 +1167,14 @@ final class ShortcutStore: ObservableObject {
                 let message = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
                 DispatchQueue.main.async {
                     ShortcutStore.showAlert(
-                        title: "Couldn't run “\(shortcut.label)”",
-                        message: (message?.isEmpty == false ? message! : "Failed to launch \(terminal.displayName).")
+                        title: "Couldn't run “\(shortcutLabel)”",
+                        message: (message?.isEmpty == false ? message! : "Failed to launch \(terminal.displayName). Make sure it's installed.")
                     )
                 }
             }
         } catch {
             ShortcutStore.showAlert(
-                title: "Couldn't run “\(shortcut.label)”",
+                title: "Couldn't run “\(shortcutLabel)”",
                 message: error.localizedDescription
             )
         }
@@ -1219,18 +1186,6 @@ final class ShortcutStore: ObservableObject {
         alert.messageText = title
         alert.informativeText = message
         alert.runModal()
-    }
-
-    /// Wraps a path in single quotes for safe use as a single shell argument —
-    /// neutralizes $, `, ;, and other shell metacharacters, not just quote chars.
-    private static func shellQuoted(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    /// Escapes a string for embedding inside an AppleScript double-quoted literal.
-    private static func appleScriptEscaped(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     /// First-run trust prompt for scripts that arrived via a .shorkut import rather
