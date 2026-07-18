@@ -1,5 +1,8 @@
 import SwiftUI
 import AppKit
+#if canImport(ShorkutCore)
+import ShorkutCore
+#endif
 
 final class ScriptEditorWindow: NSWindow {
     init(store: ShortcutStore, shortcut: ScriptShortcut) {

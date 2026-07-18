@@ -33,14 +33,8 @@ func shorkutDragProvider(_ payload: String) -> NSItemProvider {
     return provider
 }
 
-/// Per-tile configuration: which desktop tile windows exist and what each shows.
-/// `sectionIds == nil` means "mirror everything" (the default); a non-nil set
-/// makes the tile independent, showing only those sections.
-struct TileConfig: Identifiable, Codable, Equatable {
-    var id: String
-    var name: String
-    var sectionIds: Set<UUID>?
-}
+// ShortcutSection, ShortcutKind, ScriptShortcut, TileConfig, PersistentState now live in
+// ShorkutCore/Models.swift (Foundation-only) so persistence/migration are testable.
 
 /// Reads a drag payload produced by `shorkutDragProvider`, if present.
 func loadShorkutDragPayload(from providers: [NSItemProvider], completion: @escaping (String) -> Void) {
@@ -48,58 +42,6 @@ func loadShorkutDragPayload(from providers: [NSItemProvider], completion: @escap
     provider.loadDataRepresentation(forTypeIdentifier: UTType.shorkutDragPayload.identifier) { data, _ in
         guard let data, let string = String(data: data, encoding: .utf8) else { return }
         DispatchQueue.main.async { completion(string) }
-    }
-}
-
-struct Section: Identifiable, Codable, Equatable {
-    let id: UUID
-    var name: String
-
-    init(id: UUID = UUID(), name: String) {
-        self.id = id
-        self.name = name
-    }
-}
-
-enum ShortcutKind: String, Codable {
-    case script
-    case app
-    case webpage
-}
-
-struct ScriptShortcut: Identifiable, Codable {
-    let id: UUID
-    var label: String
-    var scriptPath: String
-    var sectionId: UUID
-    var kind: ShortcutKind
-    var customIcon: String?
-    var customColorHex: String?
-    /// True for scripts whose content arrived via a .shorkut import (not chosen
-    /// directly by the user via a file picker). Gates a one-time trust prompt.
-    var needsTrustConfirmation: Bool = false
-
-    init(id: UUID = UUID(), label: String, scriptPath: String, sectionId: UUID, kind: ShortcutKind = .script, customIcon: String? = nil, customColorHex: String? = nil, needsTrustConfirmation: Bool = false) {
-        self.id = id
-        self.label = label
-        self.scriptPath = scriptPath
-        self.sectionId = sectionId
-        self.kind = kind
-        self.customIcon = customIcon
-        self.customColorHex = customColorHex
-        self.needsTrustConfirmation = needsTrustConfirmation
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        label = try container.decode(String.self, forKey: .label)
-        scriptPath = try container.decode(String.self, forKey: .scriptPath)
-        sectionId = try container.decode(UUID.self, forKey: .sectionId)
-        kind = try container.decodeIfPresent(ShortcutKind.self, forKey: .kind) ?? .script
-        customIcon = try container.decodeIfPresent(String.self, forKey: .customIcon)
-        customColorHex = try container.decodeIfPresent(String.self, forKey: .customColorHex)
-        needsTrustConfirmation = try container.decodeIfPresent(Bool.self, forKey: .needsTrustConfirmation) ?? false
     }
 }
 
@@ -211,7 +153,7 @@ final class ShortcutStore: ObservableObject {
     static let shared = ShortcutStore()
     static let generalSectionID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
-    @Published var sections: [Section] = [Section(id: generalSectionID, name: "General")]
+    @Published var sections: [ShortcutSection] = [ShortcutSection(id: generalSectionID, name: "General")]
     @Published var shortcuts: [ScriptShortcut] = []
     @Published var preferredTerminal: TerminalApp
     @Published var preferredBrowser: BrowserApp?
@@ -244,12 +186,24 @@ final class ShortcutStore: ObservableObject {
     /// ids with no per-tile settings. Migrated into `tiles` on first load.
     private static let legacyTileIdsDefaultsKey = "ShorkutTileIds"
 
+    private static var supportDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Shorkut", isDirectory: true)
+    }
+
     private static var scriptsDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Shorkut/Scripts", isDirectory: true)
+        let base = supportDirectory.appendingPathComponent("Scripts", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base
     }
+
+    /// Sections, shortcuts, and tiles live in one atomically-written, backup-
+    /// protected state file (not scattered UserDefaults blobs). Small prefs
+    /// (terminal/browser/grid/collapsed/…) stay in UserDefaults.
+    private static var stateFileURL: URL {
+        supportDirectory.appendingPathComponent("state.json")
+    }
+    private let stateStore = StateFileStore<PersistentState>(fileURL: ShortcutStore.stateFileURL)
 
     init() {
         if let saved = UserDefaults.standard.string(forKey: ShortcutStore.preferredTerminalDefaultsKey),
@@ -360,53 +314,89 @@ final class ShortcutStore: ObservableObject {
         UserDefaults.standard.set(collapsedSectionIds.map { $0.uuidString }, forKey: ShortcutStore.collapsedSectionsDefaultsKey)
     }
 
-    var groupedShortcuts: [(section: Section, shortcuts: [ScriptShortcut])] {
+    var groupedShortcuts: [(section: ShortcutSection, shortcuts: [ScriptShortcut])] {
         sections.map { section in
             (section, shortcuts.filter { $0.sectionId == section.id })
         }
     }
 
     private func load() {
-        if let data = UserDefaults.standard.data(forKey: ShortcutStore.sectionsDefaultsKey),
-           let decoded = try? JSONDecoder().decode([Section].self, from: data),
-           !decoded.isEmpty {
-            sections = decoded
-        }
-        if let data = UserDefaults.standard.data(forKey: ShortcutStore.shortcutsDefaultsKey),
-           let decoded = try? JSONDecoder().decode([ScriptShortcut].self, from: data) {
-            shortcuts = decoded
-        }
+        // Collapsed-section state is a small pref and stays in UserDefaults.
         if let strings = UserDefaults.standard.stringArray(forKey: ShortcutStore.collapsedSectionsDefaultsKey) {
             collapsedSectionIds = Set(strings.compactMap { UUID(uuidString: $0) })
         }
-        if let data = UserDefaults.standard.data(forKey: ShortcutStore.tilesDefaultsKey),
-           let decoded = try? JSONDecoder().decode([TileConfig].self, from: data),
-           !decoded.isEmpty {
-            tiles = decoded
-        } else if let legacyIds = UserDefaults.standard.stringArray(forKey: ShortcutStore.legacyTileIdsDefaultsKey),
-                  !legacyIds.isEmpty {
-            // Migrate from the pre-TileConfig flat id list (no per-tile settings existed yet).
-            tiles = legacyIds.enumerated().map { index, id in
-                TileConfig(id: id, name: "Tile \(index + 1)", sectionIds: nil)
+
+        switch stateStore.load() {
+        case .loaded(let state):
+            apply(state)
+        case .recoveredFromBackup(let state):
+            apply(state)
+            ShortcutStore.showAlert(
+                title: "Recovered your shortcuts",
+                message: "Shorkut's main data file was unreadable, so your shortcuts were restored from the automatic backup."
+            )
+        case .empty:
+            migrateFromLegacyDefaultsIfNeeded()
+        case .corrupt(let error):
+            // Never silently reset: move the unreadable file aside for recovery
+            // and start from defaults, telling the user where their data went.
+            let moved = stateStore.quarantineCorruptFile()
+            let whereText = moved.map { " Your previous file was kept at:\n\($0.path)" } ?? ""
+            ShortcutStore.showAlert(
+                title: "Couldn't read your saved shortcuts",
+                message: "Shorkut's data file was corrupted (\(error.localizedDescription)) and no backup was available, so it's starting fresh.\(whereText)"
+            )
+        }
+    }
+
+    private func apply(_ state: PersistentState) {
+        sections = state.sections.isEmpty ? [ShortcutSection(id: ShortcutStore.generalSectionID, name: "General")] : state.sections
+        shortcuts = state.shortcuts
+        tiles = state.tiles.isEmpty ? [TileConfig(id: DesktopTileWindow.primaryTileId, name: "Tile 1", sectionIds: nil)] : state.tiles
+    }
+
+    /// Migrates the pre-state-file layout (separate UserDefaults JSON blobs) into
+    /// the state file exactly once. Idempotent: after a successful migration the
+    /// state file exists, so `load()` takes the `.loaded` path and never re-runs
+    /// this. The legacy keys are cleared so there's a single source of truth.
+    private func migrateFromLegacyDefaultsIfNeeded() {
+        let defaults = UserDefaults.standard
+        let sectionsJSON = defaults.data(forKey: ShortcutStore.sectionsDefaultsKey)
+        let shortcutsJSON = defaults.data(forKey: ShortcutStore.shortcutsDefaultsKey)
+        let tilesJSON = defaults.data(forKey: ShortcutStore.tilesDefaultsKey)
+        let legacyTileIDs = defaults.stringArray(forKey: ShortcutStore.legacyTileIdsDefaultsKey)
+
+        let hasLegacyData = sectionsJSON != nil || shortcutsJSON != nil || tilesJSON != nil || (legacyTileIDs?.isEmpty == false)
+        guard hasLegacyData else { return }  // genuine fresh install — keep defaults
+
+        let migrated = StateMigration.migrate(
+            sectionsJSON: sectionsJSON, shortcutsJSON: shortcutsJSON,
+            tilesJSON: tilesJSON, legacyTileIDs: legacyTileIDs
+        )
+        apply(migrated)
+
+        if case .success = stateStore.save(migrated) {
+            for key in [ShortcutStore.sectionsDefaultsKey, ShortcutStore.shortcutsDefaultsKey,
+                        ShortcutStore.tilesDefaultsKey, ShortcutStore.legacyTileIdsDefaultsKey] {
+                defaults.removeObject(forKey: key)
             }
-            saveTiles()
         }
     }
 
-    private func save() {
-        if let data = try? JSONEncoder().encode(sections) {
-            UserDefaults.standard.set(data, forKey: ShortcutStore.sectionsDefaultsKey)
-        }
-        if let data = try? JSONEncoder().encode(shortcuts) {
-            UserDefaults.standard.set(data, forKey: ShortcutStore.shortcutsDefaultsKey)
+    /// Persists the full user state to the atomic, backup-protected state file,
+    /// surfacing (rather than swallowing) any write failure.
+    private func persistState() {
+        let state = PersistentState(sections: sections, shortcuts: shortcuts, tiles: tiles)
+        if case .failure(let error) = stateStore.save(state) {
+            ShortcutStore.showAlert(
+                title: "Couldn't save your changes",
+                message: "Shorkut couldn't write its data file: \(error.localizedDescription). Your change may be lost when the app closes."
+            )
         }
     }
 
-    private func saveTiles() {
-        if let data = try? JSONEncoder().encode(tiles) {
-            UserDefaults.standard.set(data, forKey: ShortcutStore.tilesDefaultsKey)
-        }
-    }
+    private func save() { persistState() }
+    private func saveTiles() { persistState() }
 
     // MARK: - Tiles
 
@@ -475,11 +465,11 @@ final class ShortcutStore: ObservableObject {
             defaultValue: ""
         ), !name.isEmpty else { return }
 
-        sections.append(Section(name: name))
+        sections.append(ShortcutSection(name: name))
         save()
     }
 
-    func promptToRenameSection(_ section: Section) {
+    func promptToRenameSection(_ section: ShortcutSection) {
         guard let newName = ShortcutStore.promptForText(
             title: "Rename Section",
             message: "New name for “\(section.name)”:",
@@ -533,13 +523,13 @@ final class ShortcutStore: ObservableObject {
     @discardableResult
     private func ensureDefaultSection() -> UUID {
         if let first = sections.first { return first.id }
-        let section = Section(name: "General")
+        let section = ShortcutSection(name: "General")
         sections.append(section)
         save()
         return section.id
     }
 
-    func promptToDeleteSection(_ section: Section) {
+    func promptToDeleteSection(_ section: ShortcutSection) {
         let count = shortcuts.filter { $0.sectionId == section.id }.count
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -783,7 +773,7 @@ final class ShortcutStore: ObservableObject {
         return (labelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), url)
     }
 
-    private static func promptForSection(_ sections: [Section]) -> UUID? {
+    private static func promptForSection(_ sections: [ShortcutSection]) -> UUID? {
         let alert = NSAlert()
         alert.messageText = "Add to which section?"
         alert.addButton(withTitle: "Add")
@@ -961,7 +951,7 @@ final class ShortcutStore: ObservableObject {
         promptToSaveExport(ShorkutExport(items: [item]), suggestedName: shortcut.label)
     }
 
-    func exportSection(_ section: Section) {
+    func exportSection(_ section: ShortcutSection) {
         let items = shortcuts
             .filter { $0.sectionId == section.id }
             .compactMap { exportItem(for: $0) }
@@ -1101,7 +1091,7 @@ final class ShortcutStore: ObservableObject {
                 sectionIdByName[key] = existing.id
                 return existing.id
             }
-            let newSection = Section(name: key)
+            let newSection = ShortcutSection(name: key)
             sections.append(newSection)
             sectionIdByName[key] = newSection.id
             return newSection.id

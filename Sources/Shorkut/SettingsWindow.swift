@@ -1,6 +1,10 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+// Flat build.sh compile has no module boundary; SPM (swift test) needs the import.
+#if canImport(ShorkutCore)
+import ShorkutCore
+#endif
 
 final class SettingsWindow: NSWindow {
     init(store: ShortcutStore, appDelegate: AppDelegate) {
@@ -171,7 +175,7 @@ struct ShortcutsTab: View {
     @ObservedObject private var appsModel = AppsBrowserModel()
     @ObservedObject private var searchModel = ShortcutSearchModel()
 
-    private func filteredShortcuts(for group: (section: Section, shortcuts: [ScriptShortcut])) -> [ScriptShortcut] {
+    private func filteredShortcuts(for group: (section: ShortcutSection, shortcuts: [ScriptShortcut])) -> [ScriptShortcut] {
         guard !searchModel.query.isEmpty else { return group.shortcuts }
         return group.shortcuts.filter { $0.label.localizedCaseInsensitiveContains(searchModel.query) }
     }

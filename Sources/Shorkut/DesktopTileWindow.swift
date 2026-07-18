@@ -2,6 +2,10 @@ import SwiftUI
 import AppKit
 import Combine
 import UniformTypeIdentifiers
+// Flat build.sh compile has no module boundary; SPM (swift test) needs the import.
+#if canImport(ShorkutCore)
+import ShorkutCore
+#endif
 
 final class DesktopTileWindow: NSWindow, NSWindowDelegate {
     private static let originDefaultsKeyPrefix = "SSHWidgetTileOrigin"
@@ -312,7 +316,7 @@ struct DesktopTileView: View {
 
     /// Sections this specific tile should show — everything, unless this tile
     /// has been made independent with its own section selection.
-    private var visibleSections: [Section] {
+    private var visibleSections: [ShortcutSection] {
         guard let allowed = store.tiles.first(where: { $0.id == tileId })?.sectionIds else {
             return store.sections
         }
@@ -324,11 +328,11 @@ struct DesktopTileView: View {
         return store.shortcuts.filter { sectionIds.contains($0.sectionId) }
     }
 
-    private func shortcuts(for section: Section) -> [ScriptShortcut] {
+    private func shortcuts(for section: ShortcutSection) -> [ScriptShortcut] {
         store.shortcuts.filter { $0.sectionId == section.id }
     }
 
-    private func sectionsForColumn(_ col: Int) -> [Section] {
+    private func sectionsForColumn(_ col: Int) -> [ShortcutSection] {
         visibleSections.enumerated().filter { $0.offset % columnCount == col }.map { $0.element }
     }
 
@@ -393,7 +397,7 @@ struct DesktopTileView: View {
     }
 
     @ViewBuilder
-    private func sectionBlock(_ section: Section) -> some View {
+    private func sectionBlock(_ section: ShortcutSection) -> some View {
         let sectionShortcuts = shortcuts(for: section)
         if !sectionShortcuts.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
@@ -417,7 +421,7 @@ struct DesktopTileView: View {
         }
     }
 
-    private func sectionHeader(_ section: Section) -> some View {
+    private func sectionHeader(_ section: ShortcutSection) -> some View {
         let isCollapsed = store.collapsedSectionIds.contains(section.id)
         return Button {
             store.toggleSectionCollapsed(section.id)
