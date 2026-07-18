@@ -539,7 +539,7 @@ final class ShortcutStore: ObservableObject {
 
         for shortcut in shortcuts where shortcut.sectionId == section.id {
             if shortcut.kind == .script {
-                try? FileManager.default.removeItem(atPath: shortcut.scriptPath)
+                deleteManagedScript(at: shortcut.scriptPath)
             }
         }
         shortcuts.removeAll { $0.sectionId == section.id }
@@ -809,9 +809,22 @@ final class ShortcutStore: ObservableObject {
     func removeShortcut(_ shortcut: ScriptShortcut) {
         shortcuts.removeAll { $0.id == shortcut.id }
         if shortcut.kind == .script {
-            try? FileManager.default.removeItem(atPath: shortcut.scriptPath)
+            deleteManagedScript(at: shortcut.scriptPath)
         }
         save()
+    }
+
+    /// Deletes a script's backing file only if it is a regular file that lives
+    /// inside Shorkut's managed scripts directory (see ManagedScripts, which
+    /// blocks traversal/prefix-collision/symlink escapes). External or invalid
+    /// paths are left untouched; a genuine deletion failure is surfaced.
+    private func deleteManagedScript(at path: String) {
+        switch ManagedScripts.deleteIfManaged(path: path, directory: ShortcutStore.scriptsDirectory) {
+        case .deleted, .skippedOutsideManagedDirectory, .skippedNotRegularFile:
+            break
+        case .failed(let message):
+            ShortcutStore.showAlert(title: "Couldn't delete script file", message: message)
+        }
     }
 
     /// Ordered positions (in the flat `shortcuts` array) of every shortcut that
