@@ -118,6 +118,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Re-lays out every tile in a cascade near the top-left of the main screen,
+    /// clearing any stale/off-screen saved positions. Surfaced in Settings > Tiles.
+    func resetTilePositions() {
+        guard let screen = NSScreen.main else { return }
+        let vf = screen.visibleFrame
+        for (index, window) in tileWindows.enumerated() {
+            let step = CGFloat(index) * 44
+            let x = vf.minX + 24 + step
+            let y = vf.maxY - window.frame.height - 24 - step
+            window.reposition(to: DesktopTileWindow.onScreenOrigin(for: NSPoint(x: x, y: y), size: window.frame.size, on: screen))
+        }
+    }
+
     func restartApp() {
         let appURL = Bundle.main.bundleURL
         let config = NSWorkspace.OpenConfiguration()
@@ -145,6 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DesktopIconGrid.refreshFromFinderIfNeeded()
 
         let store = ShortcutStore.shared
+        store.adoptFinderGridIfNotCustomized()
         syncTileWindows(to: store.tiles)
         tileWindows.first?.playFirstLaunchAnimationIfNeeded()
         tilesCancellable = store.$tiles
@@ -152,6 +166,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] tiles in
                 self?.syncTileWindows(to: tiles)
             }
+
+        // Rescue tiles onto a visible screen whenever the display layout changes
+        // (monitor plugged/unplugged, resolution or arrangement change).
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.tileWindows.forEach { $0.ensureOnScreen() }
+        }
 
         NotificationManager.shared.requestAuthorization()
         UpdateChecker.shared.checkForUpdatesIfDue()

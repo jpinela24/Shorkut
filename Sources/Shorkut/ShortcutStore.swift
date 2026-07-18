@@ -210,6 +210,9 @@ final class ShortcutStore: ObservableObject {
     private static let tilesDefaultsKey = "ShorkutTiles"
     private static let gridCellWidthDefaultsKey = "ShorkutGridCellWidth"
     private static let gridCellHeightDefaultsKey = "ShorkutGridCellHeight"
+    /// Set once the user drags the grid sliders themselves, so we stop
+    /// auto-adopting Finder's detected grid on launch and don't clobber their tweak.
+    private static let gridManuallyAdjustedDefaultsKey = "ShorkutGridManuallyAdjusted"
     /// Legacy key from before per-tile config existed — just a flat list of tile
     /// ids with no per-tile settings. Migrated into `tiles` on first load.
     private static let legacyTileIdsDefaultsKey = "ShorkutTileIds"
@@ -268,11 +271,29 @@ final class ShortcutStore: ObservableObject {
     func setGridCellWidth(_ width: CGFloat) {
         gridCellWidth = width
         UserDefaults.standard.set(Double(width), forKey: ShortcutStore.gridCellWidthDefaultsKey)
+        UserDefaults.standard.set(true, forKey: ShortcutStore.gridManuallyAdjustedDefaultsKey)
     }
 
     func setGridCellHeight(_ height: CGFloat) {
         gridCellHeight = height
         UserDefaults.standard.set(Double(height), forKey: ShortcutStore.gridCellHeightDefaultsKey)
+        UserDefaults.standard.set(true, forKey: ShortcutStore.gridManuallyAdjustedDefaultsKey)
+    }
+
+    private func persistGrid(width: CGFloat, height: CGFloat) {
+        gridCellWidth = width
+        gridCellHeight = height
+        UserDefaults.standard.set(Double(width), forKey: ShortcutStore.gridCellWidthDefaultsKey)
+        UserDefaults.standard.set(Double(height), forKey: ShortcutStore.gridCellHeightDefaultsKey)
+    }
+
+    /// On launch, adopt Finder's real desktop grid unless the user has manually
+    /// tuned the sliders — so a fresh install lines up with the desktop out of
+    /// the box without anyone touching "Match Finder".
+    func adoptFinderGridIfNotCustomized() {
+        guard !UserDefaults.standard.bool(forKey: ShortcutStore.gridManuallyAdjustedDefaultsKey),
+              let metrics = DesktopIconGrid.finderDesktopMetrics() else { return }
+        persistGrid(width: metrics.cellWidth, height: metrics.cellHeight)
     }
 
     /// Re-detects Finder's icon size and resets the grid to the size derived
@@ -280,10 +301,18 @@ final class ShortcutStore: ObservableObject {
     /// itself isn't exposed by any API, so this is a starting point, not a
     /// guaranteed exact match — that's why manual width/height sliders exist too.
     func matchFinderGrid() {
-        DesktopIconGrid.refreshFromFinderIfNeeded(force: true) { [weak self] width, height in
-            self?.setGridCellWidth(width)
-            self?.setGridCellHeight(height)
+        guard let metrics = DesktopIconGrid.finderDesktopMetrics() else {
+            ShortcutStore.showAlert(
+                title: "Couldn't read Finder's grid",
+                message: "Shorkut couldn't read your desktop icon settings. Adjust the Width/Height sliders manually instead."
+            )
+            return
         }
+        // Treat this as a return to auto — a later manual slider drag re-sets the flag.
+        UserDefaults.standard.set(false, forKey: ShortcutStore.gridManuallyAdjustedDefaultsKey)
+        DesktopIconGrid.cellWidth = metrics.cellWidth
+        DesktopIconGrid.cellHeight = metrics.cellHeight
+        persistGrid(width: metrics.cellWidth, height: metrics.cellHeight)
     }
 
     func setPreferredBrowser(_ app: BrowserApp?) {

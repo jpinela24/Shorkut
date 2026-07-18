@@ -58,7 +58,9 @@ final class DesktopTileWindow: NSWindow, NSWindowDelegate {
         delegate = self
 
         if let savedOrigin = DesktopTileWindow.savedOrigin(for: id) {
-            setFrameOrigin(savedOrigin)
+            // A saved position can land off-screen if a monitor was unplugged or
+            // the resolution changed since last launch — clamp it back into view.
+            setFrameOrigin(DesktopTileWindow.onScreenOrigin(for: savedOrigin, size: size))
         } else if let screen = NSScreen.main {
             let x = screen.frame.minX + 24 + (id == DesktopTileWindow.primaryTileId ? 0 : CGFloat.random(in: 40...160))
             let y = screen.frame.maxY - size.height - 60 - (id == DesktopTileWindow.primaryTileId ? 0 : CGFloat.random(in: 40...160))
@@ -132,9 +134,59 @@ final class DesktopTileWindow: NSWindow, NSWindowDelegate {
 
         let snappedX = anchor.x - snappedOffsetX
         let snappedY = anchor.y - snappedOffsetY
-        guard abs(snappedX - frame.origin.x) > 0.5 || abs(snappedY - frame.origin.y) > 0.5 else { return }
-        setFrameOrigin(NSPoint(x: snappedX, y: snappedY))
+        // Never let a snap push the tile past the screen edge — clamp to the
+        // visible frame so a cell near the boundary can't send it out of reach.
+        let target = DesktopTileWindow.onScreenOrigin(for: NSPoint(x: snappedX, y: snappedY), size: frame.size, on: screen)
+        guard abs(target.x - frame.origin.x) > 0.5 || abs(target.y - frame.origin.y) > 0.5 else { return }
+        setFrameOrigin(target)
         DesktopTileWindow.saveOrigin(frame.origin, for: id)
+    }
+
+    /// Re-clamps the tile into a visible screen. Called when the screen layout
+    /// changes (monitor plugged/unplugged, resolution change) so tiles can't get
+    /// stranded on a display that no longer exists.
+    func ensureOnScreen() {
+        let clamped = DesktopTileWindow.onScreenOrigin(for: frame.origin, size: frame.size)
+        guard abs(clamped.x - frame.origin.x) > 0.5 || abs(clamped.y - frame.origin.y) > 0.5 else { return }
+        setFrameOrigin(clamped)
+        DesktopTileWindow.saveOrigin(frame.origin, for: id)
+    }
+
+    /// Moves the tile to an explicit origin and persists it (used by "Reset
+    /// tile positions").
+    func reposition(to origin: NSPoint) {
+        setFrameOrigin(origin)
+        DesktopTileWindow.saveOrigin(frame.origin, for: id)
+    }
+
+    /// Returns `origin` unchanged if a tile of `size` placed there is meaningfully
+    /// visible on some screen; otherwise clamps it fully inside the preferred
+    /// screen's visible frame (the passed-in `screen`, else the one holding most
+    /// of the rect, else the main screen).
+    static func onScreenOrigin(for origin: NSPoint, size: NSSize, on screen: NSScreen? = nil) -> NSPoint {
+        let rect = NSRect(origin: origin, size: size)
+        let screens = NSScreen.screens
+        let alreadyVisible = screens.contains { s in
+            let inter = s.visibleFrame.intersection(rect)
+            return inter.width >= 48 && inter.height >= 48
+        }
+        if screen == nil && alreadyVisible { return origin }
+
+        func overlapArea(_ s: NSScreen) -> CGFloat {
+            let inter = s.visibleFrame.intersection(rect)
+            return inter.isNull ? 0 : inter.width * inter.height
+        }
+        let target = screen
+            ?? screens.max(by: { overlapArea($0) < overlapArea($1) })
+            ?? NSScreen.main
+            ?? screens.first
+        guard let vf = target?.visibleFrame else { return origin }
+
+        let maxX = max(vf.minX, vf.maxX - size.width)
+        let maxY = max(vf.minY, vf.maxY - size.height)
+        let x = min(max(origin.x, vf.minX), maxX)
+        let y = min(max(origin.y, vf.minY), maxY)
+        return NSPoint(x: x, y: y)
     }
 
     /// Grows/shrinks the tile to fit its shortcut list and chosen width, keeping the

@@ -51,7 +51,7 @@ struct SettingsView: View {
                 case .general:
                     GeneralTab(appDelegate: appDelegate, store: store)
                 case .tiles:
-                    TilesTab(store: store)
+                    TilesTab(store: store, appDelegate: appDelegate)
                 }
             }
             .padding(16)
@@ -505,6 +505,7 @@ struct ImportTab: View {
 
 struct TilesTab: View {
     @ObservedObject var store: ShortcutStore
+    let appDelegate: AppDelegate
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -540,7 +541,7 @@ struct TilesTab: View {
                     }
                     .controlSize(.small)
                 }
-                Text("Finder doesn't expose its grid-spacing setting directly, so this is an approximation based on your icon size. Nudge the sliders if dragging a tile doesn't quite line up with your desktop icons.")
+                Text("“Match Finder” reads your desktop's real icon size and grid spacing from Finder's settings. It's usually spot-on; nudge the sliders only if a dragged tile doesn't quite line up with your desktop icons.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -562,6 +563,22 @@ struct TilesTab: View {
                 }
             }
             .frame(maxWidth: 420)
+
+            Divider()
+
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Lost a tile off-screen?").font(.subheadline.bold())
+                    Text("Brings every tile back to the top-left of your main display.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Reset positions") {
+                    appDelegate.resetTilePositions()
+                }
+                .controlSize(.small)
+            }
 
             Divider()
 
